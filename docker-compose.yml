@@ -1,0 +1,25 @@
+version: "3.9"
+services:
+  aoi_image_analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aoi_image_analyzer
+    restart: always
+    ports:
+      - "7860:7860"  # 對外開放 port 7860
+    volumes:
+      - .:/app  # 將 app 資料夾掛載進容器中
+    working_dir: /app
+    command: python3 gradio_app.py
+    stdin_open: true
+    tty: true
+    shm_size: '16gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - DISPLAY=${DISPLAY}

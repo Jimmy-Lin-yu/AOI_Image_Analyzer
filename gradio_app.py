@@ -224,4 +224,4 @@ with gr.Blocks() as demo:
 
     backup_btn.click(backup_csv, outputs=backup_result)
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(server_name="0.0.0.0", server_port=7860)
