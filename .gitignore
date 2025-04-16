@@ -2,3 +2,15 @@
 
 .gradio/flagged/dataset1.csv
 flagged/backup_dataset.csv
+__pycache__/app.cpython-310.pyc
+.gitignore
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.mp4
+*.avi
+*.mov
+*.mkv
+*bmp
+*.pyc

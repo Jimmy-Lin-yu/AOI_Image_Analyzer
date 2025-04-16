@@ -49,27 +49,34 @@ class ImageQualityAnalyzer:
     @classmethod
     def evaluate_quality(cls, metrics: dict) -> tuple:
         """
-        根據每項指標的閾值計算分數。
-        每項評分規則：
-          - 如果值 >= high threshold, score = 5
-          - 如果值 >= mid threshold, score = 3
-          - 否則 score = 1
-        總品質 = (所有分數平均 / 5) * 100 (百分比)
+        Compute continuous scores based on the metric values using piecewise linear interpolation.
+        
+        For each metric:
+          - If value <= mid threshold: Score = 1 + (value/mid_threshold) * 2     (Score from 1 to 3)
+          - If mid threshold < value < high threshold: 
+                Score = 3 + ((value - mid_threshold) / (high_threshold - mid_threshold)) * 2  
+                (Score from 3 to 5)
+          - If value >= high threshold: Score = 5
+          
+        Overall Quality (%) = (Average Score / 5) * 100
         """
         scores = []
         for key in ["sharpness", "exposure", "contrast", "uniformity", "noise"]:
             value = metrics.get(key, 0)
             high, mid = cls.thresholds[key]
+            
             if value >= high:
-                score = 5
-            elif value >= mid:
-                score = 3
+                score = 5.0
+            elif value <= mid:
+                # Linear interpolation between 1 and 3 when value ranges from 0 to mid
+                score = 1.0 + (value / mid) * 2.0
             else:
-                score = 1
+                # Linear interpolation between 3 and 5 when value ranges from mid to high
+                score = 3.0 + ((value - mid) / (high - mid)) * 2.0
             scores.append(score)
-        total = sum(scores) / len(scores) / 5 * 100
-        return scores, total
-
+        
+        total_quality = sum(scores) / (len(scores) * 5.0) * 100.0
+        return scores, total_quality
 
 
     def process_evaluate(self, folder_path: str = None) -> None:

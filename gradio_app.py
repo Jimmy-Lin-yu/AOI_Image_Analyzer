@@ -7,7 +7,8 @@ import shutil
 import zipfile
 import tempfile
 
-from app import ImageQualityAnalyzer
+from image_evaluation import ImageQualityAnalyzer
+from word_change import FilenameTranslator
 
 # ------------------ 分析圖片 ------------------
 import os
@@ -17,7 +18,25 @@ import numpy as np
 import zipfile
 import tempfile
 from datetime import datetime
-from app import ImageQualityAnalyzer  # 確保這行路徑正確！如果你的 class 實際在 app.py
+from image_evaluation import ImageQualityAnalyzer  # 確保這行路徑正確！如果你的 class 實際在 app.py
+
+def extract_zip_preserve_chinese(zip_file_path, dest_dir, from_enc='cp437', to_enc='gbk'):
+    """
+    Extracts a ZIP file while re-decoding filenames from `from_enc` to `to_enc`.
+    Adjust encodings if your ZIP uses a different scheme.
+    """
+    with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+        for zf_info in zip_ref.infolist():
+            try:
+                # Re-decode the filename: first get the bytes as interpreted in cp437,
+                # then decode them using the expected Chinese encoding (gbk).
+                decoded_filename = zf_info.filename.encode(from_enc).decode(to_enc)
+            except Exception as e:
+                # In case of failure, fall back to original filename
+                decoded_filename = zf_info.filename
+            # Update the in-memory filename before extraction
+            zf_info.filename = decoded_filename
+            zip_ref.extract(zf_info, dest_dir)
 
 def analyze_input(uploaded):
     csv_path = os.path.join(".gradio", "flagged", "dataset1.csv")
@@ -51,6 +70,8 @@ def analyze_input(uploaded):
             "output": output_text
         })
         return output_text
+    
+    translator = FilenameTranslator()
 
     # ✅ 單張圖片 (來自 Gr.Image)
     if isinstance(uploaded, np.ndarray):
@@ -59,37 +80,64 @@ def analyze_input(uploaded):
         result = process_image(image_bgr, image_name)
 
     # ✅ ZIP 檔案
+
     elif hasattr(uploaded, "name") and uploaded.name.endswith(".zip"):
         result = "📦 ZIP 解壓分析結果：\n"
         with tempfile.TemporaryDirectory() as temp_dir:
-            with zipfile.ZipFile(uploaded.name, 'r') as zip_ref:
-                zip_ref.extractall(temp_dir)
+            # Extract the ZIP while preserving the complete Chinese filenames
+            extract_zip_preserve_chinese(uploaded.name, temp_dir)
+           #with zipfile.ZipFile(uploaded.name, 'r') as zip_ref:
+           #     zip_ref.extractall(temp_dir)
             for root, _, files in os.walk(temp_dir):
                 for fname in files:
                     if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
                         full_path = os.path.join(root, fname)
+                        # Translate filename
+
+                        if "光度立体" in fname:
+                            try:
+                                os.remove(full_path)
+                                result += f"{fname} → 包含 '光度立体' 已被刪除\n"
+                            except Exception as e:
+                                result += f"{fname} → ⚠️ 刪除失敗: {e}\n"
+                            continue
+
+                        # Translate filename
+                        new_fname = translator.translate(fname)
                         image = cv2.imread(full_path)
                         if image is not None:
-                            _ = process_image(image, fname)
-                            result += f"{fname} → 分析完成\n"
+                            _ = process_image(image, new_fname)
+                            result += f"{new_fname} → 分析完成\n"
                         else:
-                            result += f"{fname} → ⚠️ 無法讀取\n"
+                            result += f"{new_fname} → ⚠️ 無法讀取\n"
 
     # ✅ 單張圖片檔案 (from gr.File)
     elif hasattr(uploaded, "name") and uploaded.name.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
-        image = cv2.imread(uploaded.name)
-        if image is not None:
-            result = process_image(image, uploaded.name)
+        # Check if the filename contains "光度立体" and delete if so
+        if "光度立体" in uploaded.name:
+            try:
+                os.remove(uploaded.name)
+                result = f"{uploaded.name} → 包含 '光度立体' 已被刪除"
+            except Exception as e:
+                result = f"{uploaded.name} → ⚠️ 刪除失敗: {e}"
         else:
-            result = "⚠️ 無法讀取圖片內容"
+            new_fname = translator.translate(uploaded.name)
+            image = cv2.imread(uploaded.name)
+            if image is not None:
+                result = process_image(image, new_fname)
+                records.append({"uploaded_image": new_fname})
+            else:
+                result = "⚠️ 無法讀取圖片內容"
     else:
         return "❌ 請上傳圖片、ZIP 或有效的圖片格式"
 
-    # ✅ 儲存到 CSV，避免重複圖片
+
     df_new = pd.DataFrame(records)
     if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
         df_old = pd.read_csv(csv_path)
+        # Get the existing filenames by taking the basename from the uploaded_image column.
         existing_filenames = set(df_old["uploaded_image"].apply(os.path.basename).tolist())
+        # Keep only those new entries that are not already in the CSV.
         df_new = df_new[~df_new["uploaded_image"].apply(os.path.basename).isin(existing_filenames)]
         df_all = pd.concat([df_old, df_new], ignore_index=True)
     else:
@@ -111,6 +159,9 @@ def show_flagged_data():
             return pd.DataFrame(columns=["Image","Total Quality","Sharpness", "Exposure", "Contrast", "Uniformity", "Noise", "Timestamp"])
 
         df = pd.read_csv(csv_path)
+
+        # 1. Fill empty output cells with empty string, then convert everything to string.
+        df["output"] = df["output"].fillna("").astype(str)
 
         # 用正則表達式解析數值
         import re
@@ -167,7 +218,7 @@ def display_selected_image(image_name):
 
 
 
-# ------------------ 備份 CSV 檔案 ------------------
+# ------------------ 備份與刪除 CSV 檔案 ------------------
 def backup_csv():
     src = os.path.join(".gradio", "flagged", "dataset1.csv")
     dst = os.path.join("flagged", "backup_dataset.csv")
@@ -177,6 +228,40 @@ def backup_csv():
         return f"✅ 備份成功，儲存為：{dst}"
     else:
         return "⚠️ 找不到 dataset1.csv"
+
+
+def clear_images_csv():
+    """
+    1. 清空 .gradio/flagged/dataset1.csv
+    2. 刪除 .gradio/flagged/uploaded_image/ 內所有檔案
+    """
+    base_dir   = ".gradio/flagged"
+    csv_path   = os.path.join(base_dir, "dataset1.csv")
+    image_dir  = os.path.join(base_dir, "uploaded_image")
+
+    try:
+        # --- 1️⃣ 重設 CSV ---
+        if os.path.exists(csv_path):
+            pd.DataFrame(columns=["uploaded_image", "output"]).to_csv(csv_path, index=False)
+        else:
+            # 如果檔案不存在也無妨，直接當作已清空
+            pass
+
+        # --- 2️⃣ 刪除已上傳圖片 ---
+        if os.path.isdir(image_dir):
+            # 逐檔刪除，保留資料夾結構（避免後續寫檔失敗）
+            for root, _, files in os.walk(image_dir):
+                for f in files:
+                    try:
+                        os.remove(os.path.join(root, f))
+                    except Exception as e:
+                        print("⚠️ 無法刪除", f, "：", e)
+
+        return "✅ 清除成功：CSV 已重設，uploaded_image 內檔案已刪除"
+    except Exception as e:
+        return f"❌ 清除失敗：{e}"
+
+
 
 # ------------------ Gradio UI ------------------
 with gr.Blocks() as demo:
@@ -200,6 +285,8 @@ with gr.Blocks() as demo:
             preview_buttons = [gr.Button(f"查看第{i+1}名圖片") for i in range(5)]  # 🔘 五個按鈕
             backup_btn = gr.Button("📁 備份 CSV")
             backup_result = gr.Textbox(label="備份結果")
+            clear_btn = gr.Button("🗑️ 清除 dataset1.csv")
+            clear_result = gr.Textbox(label="清除結果")
 
     submit_btn.click(analyze_input, inputs=image_input, outputs=output_text)
     history_btn.click(show_flagged_data, outputs=df_output)
@@ -223,5 +310,6 @@ with gr.Blocks() as demo:
         )
 
     backup_btn.click(backup_csv, outputs=backup_result)
+    clear_btn.click(clear_images_csv, outputs=clear_result)
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0", server_port=7860)
