@@ -2,3 +2,5 @@ opencv-python
 numpy
 pandas
 gradio
+ultralytics==8.3.109
+matplotlib==3.10.1

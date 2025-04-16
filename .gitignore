@@ -7,6 +7,7 @@ __pycache__/app.cpython-310.pyc
 *.jpg
 *.jpeg
 *.png
+*.json
 *.gif
 *.mp4
 *.avi
@@ -14,3 +15,7 @@ __pycache__/app.cpython-310.pyc
 *.mkv
 *bmp
 *.pyc
+*.pt
+*.pth
+*.log
+*.txt
