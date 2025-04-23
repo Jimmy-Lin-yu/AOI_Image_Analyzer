@@ -24,3 +24,28 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - DISPLAY=${DISPLAY}
+
+  json_generator: 
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: json_generator
+    restart: always
+    ports:
+      - "8000:8000"  # 對外開放 port 8000
+    volumes:
+      - .:/app  # 將 app 資料夾掛載進容器中
+    working_dir: /app
+    command: python3 json_generate.py
+    # command: sleep 10000
+    stdin_open: true
+    tty: true
+    shm_size: '16gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - DISPLAY=${DISPLAY}

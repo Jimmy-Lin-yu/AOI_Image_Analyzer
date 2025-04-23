@@ -59,40 +59,61 @@ def store_uploaded_files(uploaded, upload_folder):
         result += f"已儲存單張圖片：{image_name}\n"
     
     # 處理 ZIP 壓縮包
-    elif hasattr(uploaded, "name") and uploaded.name.endswith(".zip"):
+    elif hasattr(uploaded, "name") and uploaded.name.lower().endswith(".zip"):
         result += "📦 解壓 ZIP 檔案中...\n"
         with tempfile.TemporaryDirectory() as temp_dir:
             extract_zip_preserve_chinese(uploaded.name, temp_dir)
             for root, _, files in os.walk(temp_dir):
                 for fname in files:
-                    if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
-                        # 刪除包含 "光度立体" 的檔案
-                        if "光度立体" in fname:
-                            try:
-                                os.remove(os.path.join(root, fname))
-                                result += f"{fname} → 包含 '光度立体' 已刪除\n"
-                            except Exception as e:
-                                result += f"{fname} → 刪除失敗: {e}\n"
-                            continue
-                        new_fname = translator.translate(fname)
-                        src_path = os.path.join(root, fname)
-                        dst_path = os.path.join(upload_folder, new_fname)
-                        shutil.copy(src_path, dst_path)
-                        result += f"已複製圖片：{new_fname}\n"
-    
+                    if not fname.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
+                        continue
+
+                    # 刪除包含 "光度立体" 的檔案
+                    if "光度立体" in fname:
+                        try:
+                            os.remove(os.path.join(root, fname))
+                            result += f"{fname} → 包含 '光度立体' 已刪除\n"
+                        except Exception as e:
+                            result += f"{fname} → 刪除失敗: {e}\n"
+                        continue
+
+                    new_fname = translator.translate(fname)
+                    src_path = os.path.join(root, fname)
+                    dst_path = os.path.join(upload_folder, new_fname)
+
+                    # 避免複製到自己
+                    try:
+                        if os.path.abspath(src_path) != os.path.abspath(dst_path):
+                            shutil.copy(src_path, dst_path)
+                            result += f"已複製圖片：{new_fname}\n"
+                        else:
+                            result += f"{new_fname} → 路徑相同，跳過複製\n"
+                    except SameFileError:
+                        result += f"{new_fname} → 同一檔案，已跳過\n"
+
     # 處理單個圖片檔案 (gr.File)
     elif hasattr(uploaded, "name") and uploaded.name.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
-        if "光度立体" in uploaded.name:
+        src_name = uploaded.name
+        # 刪除包含 "光度立体" 的檔案
+        if "光度立体" in os.path.basename(src_name):
             try:
-                os.remove(uploaded.name)
-                result += f"{uploaded.name} → 包含 '光度立体' 已刪除\n"
+                os.remove(src_name)
+                result += f"{os.path.basename(src_name)} → 包含 '光度立体' 已刪除\n"
             except Exception as e:
-                result += f"{uploaded.name} → 刪除失敗: {e}\n"
+                result += f"{os.path.basename(src_name)} → 刪除失敗: {e}\n"
         else:
-            new_fname = translator.translate(uploaded.name)
+            new_fname = translator.translate(os.path.basename(src_name))
             dst_path = os.path.join(upload_folder, new_fname)
-            shutil.copy(uploaded.name, dst_path)
-            result += f"已複製單張圖片：{new_fname}\n"
+            # 避免複製到自己
+            try:
+                if os.path.abspath(src_name) != os.path.abspath(dst_path):
+                    shutil.copy(src_name, dst_path)
+                    result += f"已複製單張圖片：{new_fname}\n"
+                else:
+                    result += f"{new_fname} → 路徑相同，跳過複製\n"
+            except SameFileError:
+                result += f"{new_fname} → 同一檔案，已跳過\n"
+
     else:
         return "❌ 請上傳圖片、ZIP 或有效的圖片格式"
     
@@ -147,7 +168,7 @@ def quality_analysis_on_cropped(crop_folder, csv_path):
                 "exposure": analyzer.calculate_exposure(image),
                 "contrast": analyzer.calculate_contrast(image),
                 "uniformity": analyzer.calculate_light_uniformity(image),
-                "noise": analyzer.calculate_noise(image)
+                "defect": analyzer.calculate_defect_score(image)
             }
             scores, total = ImageQualityAnalyzer.evaluate_quality(metrics)
             output_text = "影像品質分析結果：\n"
@@ -206,7 +227,7 @@ def show_flagged_data():
     try:
         csv_path = os.path.join(".gradio", "flagged", "dataset1.csv")
         if not os.path.exists(csv_path):
-            return pd.DataFrame(columns=["Image","Total Quality","Sharpness", "Exposure", "Contrast", "Uniformity", "Noise", "Timestamp"])
+            return pd.DataFrame(columns=["Image","Total Quality","Sharpness", "Exposure", "Contrast", "Uniformity", "Defect", "Timestamp"])
 
         df = pd.read_csv(csv_path)
 
@@ -230,14 +251,14 @@ def show_flagged_data():
         df["Exposure"] = df["output"].apply(lambda x: extract_metric(x, "Exposure"))
         df["Contrast"] = df["output"].apply(lambda x: extract_metric(x, "Contrast"))
         df["Uniformity"] = df["output"].apply(lambda x: extract_metric(x, "Uniformity"))
-        df["Noise"] = df["output"].apply(lambda x: extract_metric(x, "Noise"))
+        df["Defect"] = df["output"].apply(lambda x: extract_metric(x, "Defect"))
 
         df["Image"] = df["uploaded_image"].apply(os.path.basename)
         df["Timestamp"] = pd.to_datetime(df["uploaded_image"].apply(lambda f: datetime.fromtimestamp(os.path.getctime(f)) if os.path.exists(f) else pd.NaT))
 
         top5 = df.sort_values(by="Total Quality", ascending=False).head(5)
 
-        return top5[["Image", "Sharpness", "Exposure", "Contrast", "Uniformity", "Noise", "Total Quality", "Timestamp"]]
+        return top5[["Image", "Sharpness", "Exposure", "Contrast", "Uniformity", "Defect", "Total Quality", "Timestamp"]]
 
     except Exception as e:
         return pd.DataFrame({"錯誤": [f"⚠️ 讀取失敗：{e}"]})
@@ -339,7 +360,7 @@ with gr.Blocks() as demo:
             history_btn = gr.Button("📊 顯示品質最佳前五名")
             df_output = gr.Dataframe(
                 interactive=True,
-                headers=["Image", "Sharpness", "Exposure", "Contrast", "Uniformity", "Noise", "Total Quality", "Timestamp"],
+                headers=["Image", "Sharpness", "Exposure", "Contrast", "Uniformity", "Defect", "Total Quality", "Timestamp"],
             )
             selected_image = gr.Image(label="🔍 預覽圖片")  # 預覽圖
             preview_buttons = [gr.Button(f"查看第{i+1}名圖片") for i in range(5)]  # 🔘 五個按鈕
