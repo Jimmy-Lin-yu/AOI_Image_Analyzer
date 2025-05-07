@@ -3,9 +3,9 @@ import cv2
 import os
 from datetime import datetime
 import time
-
+import numpy as np
 class YOLOImageProcessor:
-    def __init__(self, model_path, image_folder, output_folder, log_folder="logs"):
+    def __init__(self, model_path, image_folder, output_folder, log_folder="logs",device='cuda:0'):
         """
         初始化 YOLOImageProcessor
 
@@ -18,6 +18,7 @@ class YOLOImageProcessor:
         self.image_folder = image_folder
         self.output_folder = output_folder
         self.log_folder = log_folder
+        self.device = device
         
         os.makedirs(self.log_folder, exist_ok=True)
         os.makedirs(self.output_folder, exist_ok=True)
@@ -25,6 +26,7 @@ class YOLOImageProcessor:
         
         # 載入 YOLO 模型
         self.model = YOLO(self.model_path)
+        self.model.to(self.device)   
         print(f"模型目前使用的設備：{self.model.device}")
     
     def _log_inference(self, image_filename, start_time_str, end_time_str, duration):
@@ -65,53 +67,111 @@ class YOLOImageProcessor:
         
         return result
 
+    # def process_images(self):
+    #     """
+    #     處理 image_folder 中的所有圖片，
+    #     執行 YOLO 推論、擷取第一個偵測到的物件框（axis-aligned bbox），
+    #     以 4 個點形式記錄，並將裁切後的圖片存入 output_folder。
+    #     """
+    #     for image_filename in os.listdir(self.image_folder):
+    #         if not image_filename.lower().endswith((".jpg", ".png", ".jpeg", "bmp")):
+    #             continue
+
+    #         image_path = os.path.join(self.image_folder, image_filename)
+    #         image = cv2.imread(image_path)
+    #         if image is None:
+    #             print(f"⚠️ 無法讀取 {image_filename}，跳過")
+    #             continue
+    #         h_img, w_img = image.shape[:2]
+
+    #         # 執行推論並記時
+    #         results = self.run_inference_with_timer(image_filename, self.model, image_path)
+
+    #         for result in results:
+    #             # 1. 取得所有 axis-aligned bbox (N×4)
+    #             bboxes = result.boxes.xyxy.cpu().numpy()  # [[x1,y1,x2,y2], ...]
+    #             if bboxes.shape[0] == 0:
+    #                 print(f"⚠️ {image_filename} 沒有偵測結果，跳過處理")
+    #                 with open(self.log_path, "a") as f:
+    #                     f.write(f"[{image_filename}] ❌ 沒有偵測結果，已跳過\n{'-'*40}\n")
+    #                 continue
+
+    #             # 2. 逐一處理每個 bbox
+    #             for idx, (x1, y1, x2, y2) in enumerate(bboxes):
+    #                 # 四個角點，順時針或逆時針都可以
+    #                 corners = [
+    #                     [int(x1), int(y1)],
+    #                     [int(x1), int(y2)],
+    #                     [int(x2), int(y2)],
+    #                     [int(x2), int(y1)],
+    #                 ]
+    #                 print(f"🗺️ {image_filename} 框 {idx} 的 4 點：{corners}")
+    #                 with open(self.log_path, "a") as f:
+    #                     f.write(f"[{image_filename}] 框 {idx} 的 4 點：{corners}\n")
+
+    #                 # 3. 防呆：邊界裁切
+    #                 x1_i, y1_i = max(0, corners[0][0]), max(0, corners[0][1])
+    #                 x2_i, y2_i = min(w_img, corners[2][0]), min(h_img, corners[2][1])
+    #                 if x2_i - x1_i < 2 or y2_i - y1_i < 2:
+    #                     print(f"⚠️ {image_filename} 框 {idx} 太小，跳過裁切")
+    #                     continue
+
+    #                 # 4. 裁切並存檔
+    #                 cropped = image[y1_i:y2_i, x1_i:x2_i]
+    #                 base, _ = os.path.splitext(image_filename)
+    #                 output_name = f"{base}_crop{idx}.png"
+    #                 output_path = os.path.join(self.output_folder, output_name)
+    #                 cv2.imwrite(output_path, cropped, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+    #                 print(f"✅ 已保存 {image_filename} 框 {idx} 裁切圖到: {output_path}")
+
+    #     print("📦 所有圖片處理完成！")
+
     def process_images(self):
-        """
-        處理 image_folder 中的所有圖片，
-        執行 YOLO 推論、擷取第一個偵測到的物件框，並將裁切後的圖片存入 output_folder。
-        """
+        import numpy as np, cv2, os
+
         for image_filename in os.listdir(self.image_folder):
-            if not image_filename.lower().endswith((".jpg", ".png", ".jpeg","bmp")):
+            if not image_filename.lower().endswith((".jpg", ".png", ".jpeg", "bmp")):
                 continue
 
+            # 讀原圖
             image_path = os.path.join(self.image_folder, image_filename)
-            image = cv2.imread(image_path)
+            image = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
             if image is None:
                 print(f"⚠️ 無法讀取 {image_filename}，跳過")
                 continue
             h_img, w_img = image.shape[:2]
 
-            # 執行推論，並對推論進行計時與記錄
+            # 推論
             results = self.run_inference_with_timer(image_filename, self.model, image_path)
-
             for result in results:
-                obb = result.obb
-
-                if obb.xyxy.shape[0] == 0:
-                    print(f"⚠️ {image_filename} 沒有偵測結果，跳過處理")
-                    with open(self.log_path, "a") as f:
-                        f.write(f"[{image_filename}] ❌ 沒有偵測結果，已跳過\n{'-'*40}\n")
+                if result.masks is None or len(result.masks.xy) == 0:
                     continue
 
-                # 以第一個偵測框作為示範（若需要處理所有框則可以加入迴圈）
-                x1, y1, x2, y2 = obb.xyxy.cpu().numpy()[0].astype(int)
+                # 每一個 instance
+                for idx, poly in enumerate(result.masks.xy):
+                    pts = poly.astype(np.int32)   # (N,2)
 
-                # 防呆處理邊界值
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(w_img, x2), min(h_img, y2)
-                if x2 - x1 < 2 or y2 - y1 < 2:
-                    print(f"⚠️ {image_filename} 裁切框過小，跳過")
-                    continue
+                    # 1) 在整圖上畫遮罩
+                    mask_full = np.zeros((h_img, w_img), dtype=np.uint8)
+                    cv2.fillPoly(mask_full, [pts], 255)
 
-                # 裁切圖片並保持原圖畫質
-                cropped_image = image[y1:y2, x1:x2]
-                output_name = os.path.splitext(image_filename)[0] + "_crop.png"
-                output_path = os.path.join(self.output_folder, output_name)
-                cv2.imwrite(output_path, cropped_image, [cv2.IMWRITE_PNG_COMPRESSION, 3])
-                print(f"✅ 已保存處理後圖片到: {output_path}")
+                    # 2) 用遮罩保留物件區域，其餘變黑
+                    masked = cv2.bitwise_and(image, image, mask=mask_full)
+
+                    # 3) 用 boundingRect 裁切出 ROI
+                    x, y, w, h = cv2.boundingRect(pts)
+                    if w < 2 or h < 2:
+                        continue
+                    cropped = masked[y:y+h, x:x+w]
+
+                    # 4) 存檔
+                    base, _ = os.path.splitext(image_filename)
+                    output_name = f"{base}_poly{idx}.png"
+                    output_path = os.path.join(self.output_folder, output_name)
+                    cv2.imwrite(output_path, cropped)
+                    print(f"✅ 已保存多邊形切割 {image_filename} instance {idx} 到: {output_path}")
 
         print("📦 所有圖片處理完成！")
-
 # ────────── 執行入口 ──────────
 if __name__ == "__main__":
     model_path = "/app/obb_runs/yolov8n-obb2/weights/best.pt"

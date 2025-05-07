@@ -49,3 +49,27 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - DISPLAY=${DISPLAY}
+  brightness_calculator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: brightness_calculator
+    restart: always
+    ports:
+      - "8800:8800"  # 對外開放 port 8800
+    volumes:
+      - .:/app  # 將 app 資料夾掛載進容器中
+    working_dir: /app
+    command: python3 brightness_calculator.py
+    # command: sleep 10000
+    stdin_open: true
+    tty: true
+    shm_size: '16gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - DISPLAY=${DISPLAY}
