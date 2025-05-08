@@ -10,6 +10,69 @@ KEY_MAP = dict(zip(MODELS, ["p1", "p2", "p3", "p4", "p5"]))
 BRIGHTNESS_BASE = ["1024", "512"]
 COLOR_BASE      = ["1000", "500", "0"]
 
+###################################
+# 1.產生單色光 JSON
+###################################
+def create_single_color_json(sk_file, model, channel):
+    """
+    根據選擇的 model & 單色 channel，僅生成 1~1024 強度的 scenes
+    回傳 JSON 檔案路徑，保留骨架中 "device" 欄位，其他模型節點刪除
+    """
+    # 1) 讀取骨架 JSON
+    path = sk_file.name
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    # 2) 保留骨架前置設定（例如 "device"）
+    new_data = {}
+    if 'device' in data:
+        new_data['device'] = data['device']
+
+    # 3) 計算 channel 索引及最大強度
+    idx_map = {'W':0, 'R':1, 'G':2, 'B':3}
+    idx = idx_map[channel]
+    max_int = 1024
+
+    # 4) 生成 scenes 列表
+    scenes = []
+    for i in range(1, max_int+1):
+        colors = [0,0,0,0]
+        colors[idx] = i
+        scenes.append({
+            "brightness": max_int,
+            "colors": colors,
+            "currentZone": 0,
+            "zoneMode": 0
+        })
+
+    # 5) 從骨架 JSON 取出對應節點並加上 scenes
+    key = KEY_MAP[model]
+    node = data.get(key)
+    if node is None:
+        raise KeyError(f"模型 {model} 對應的 KEY_MAP:{key} 不存在於骨架 JSON")
+
+    # 深拷貝節點結構，僅保留這個節點
+    if isinstance(node, list):
+        entries = []
+        for entry in node:
+            entry_copy = {k:v for k,v in entry.items() if k!='scenes'}
+            entry_copy['scenes'] = scenes
+            entries.append(entry_copy)
+        new_data[key] = entries
+    else:
+        entry_copy = {k:v for k,v in node.items() if k!='scenes'}
+        entry_copy['scenes'] = scenes
+        new_data[key] = entry_copy
+
+    # 6) 輸出 JSON
+    out_fname = f"single_{key}_{channel}.json"
+    with open(out_fname, 'w', encoding='utf-8') as f:
+        json.dump(new_data, f, ensure_ascii=False, indent=4)
+    return out_fname
+
+###################################
+# 2.產生 JSON 排列組合
+###################################
 # ---------- 排列組合：亮度 × cw × cr × cg × cb ----------
 def generate_combos_for_model(brightness_list, color_list):
     b_vals = [int(b) for b in brightness_list]
@@ -53,65 +116,61 @@ def create_json(sk_path, b_cnt, c_cnt, *txts):
               ensure_ascii=False, indent=4)
     return out
 
-# ---------- Gradio UI ----------
-with gr.Blocks(title="LightPara JSON 生成器") as demo:
-    sk_file = gr.File(label="📄 上傳骨架 JSON")
-
-    # 亮度、顏色強度數量下拉
-    b_cnt = gr.Dropdown([1,2,3], value=2, label="亮度數量",  type="value")
-    c_cnt = gr.Dropdown([1,2,3], value=3, label="顏色強度數量", type="value")
-
-    # 建立 Textbox 與 TabItem 引用
-    b_boxes, c_boxes, tab_items = [], [], []
+###################################
+# 建立 Gradio 介面
+###################################
+with gr.Blocks(title="自動打光JSON生成器") as demo:
     with gr.Tabs():
-        for m in MODELS:
-            with gr.TabItem(m) as tab:
-                tab_items.append(tab)       # 存 TabItem 實例
-                b = gr.Textbox(label="亮度列表",
-                               value=",".join(BRIGHTNESS_BASE[:2]))
-                c = gr.Textbox(label="顏色列表",
-                               value=",".join(COLOR_BASE[:3]))
-                b_boxes.append(b); c_boxes.append(c)
+        # 第一個頁籤：LightPara JSON 生成器
+        with gr.TabItem("自動打光矩陣生成"):  
+            sk_file = gr.File(label="📄 上傳骨架 JSON")
+            b_cnt = gr.Dropdown([1,2,3], value=2, label="亮度數量")
+            c_cnt = gr.Dropdown([1,2,3], value=3, label="顏色強度數量")
+            b_boxes, c_boxes, tabs = [], [], []
+            with gr.Tabs():
+                for m in MODELS:
+                    with gr.TabItem(m):
+                        b = gr.Textbox(label="亮度列表", value=",".join(BRIGHTNESS_BASE[:2]))
+                        c = gr.Textbox(label="顏色列表", value=",".join(COLOR_BASE[:3]))
+                        b_boxes.append(b)
+                        c_boxes.append(c)
+            # 同步函式
+            def _build(base, count):
+                vals = base[:count] + [base[-1]] * max(0, count-len(base))
+                return ",".join(vals)
+            def sync_all(bn, cn):
+                updates = []
+                for _ in b_boxes:
+                    updates.append(gr.update(value=_build(BRIGHTNESS_BASE, bn)))
+                for _ in c_boxes:
+                    updates.append(gr.update(value=_build(COLOR_BASE, cn)))
+                return updates
+            def sync_single(bn, cn, idx):
+                return gr.update(value=_build(BRIGHTNESS_BASE, bn)), gr.update(value=_build(COLOR_BASE, cn))
+            b_cnt.change(sync_all, [b_cnt, c_cnt], b_boxes + c_boxes)
+            c_cnt.change(sync_all, [b_cnt, c_cnt], b_boxes + c_boxes)
+            for i, tab in enumerate(tabs):
+                tab.select(lambda bn, cn, i=i: sync_single(bn, cn, i), [b_cnt, c_cnt], [b_boxes[i], c_boxes[i]])
+            demo.load(sync_all, [b_cnt, c_cnt], b_boxes + c_boxes)
+            gen_btn = gr.Button("生成 JSON")
+            out_file = gr.File(label="⬇️ 下載 lightPara.json")
+            interleaved = [v for pair in zip(b_boxes, c_boxes) for v in pair]
+            gen_btn.click(create_json, [sk_file, b_cnt, c_cnt] + interleaved, out_file)
 
-    # --- 工具函式 -------------------------------------------------
-    def _build(base, count):
-        vals = base[:count] + [base[-1]]*(count-len(base)) \
-               if count > len(base) else base[:count]
-        return ",".join(vals)
+        # 新增第二頁：單色光生成
+        with gr.TabItem("單色光生成"):
+            sk2 = gr.File(label="📄 上傳骨架 JSON")
+            model_sel = gr.Dropdown(MODELS, label="選擇模型")
+            channel_sel = gr.Dropdown(['W','R','G','B'], label="選擇光源 (W/R/G/B)")
+            gen_btn = gr.Button("生成單色光 JSON")
+            out_file = gr.File(label="⬇️ 下載 JSON")
+            gen_btn.click(
+                fn=create_single_color_json,
+                inputs=[sk2, model_sel, channel_sel],
+                outputs=out_file
+            )
 
-    def sync_all(b_count, c_count):
-        """同時更新 5×亮度與 5×顏色 textbox"""
-        return ([gr.update(value=_build(BRIGHTNESS_BASE, b_count))]*len(b_boxes) +
-                [gr.update(value=_build(COLOR_BASE,      c_count))]*len(c_boxes))
 
-    def sync_single(b_count, c_count):
-        """回傳單一分頁(亮度,顏色)的更新  -> outputs=[b_i, c_i]"""
-        return (gr.update(value=_build(BRIGHTNESS_BASE, b_count)),
-                gr.update(value=_build(COLOR_BASE,      c_count)))
-
-    # --- 事件綁定 -------------------------------------------------
-    # 1) dropdown 改變 → 已渲染的 textbox 全同步
-    b_cnt.change(sync_all, inputs=[b_cnt, c_cnt], outputs=b_boxes + c_boxes)
-    c_cnt.change(sync_all, inputs=[b_cnt, c_cnt], outputs=b_boxes + c_boxes)
-
-    # 2) 進入分頁時 → 保證該分頁 textbox 再同步一次
-    for i, tab in enumerate(tab_items):
-        tab.select(sync_single,
-                   inputs=[b_cnt, c_cnt],
-                   outputs=[b_boxes[i], c_boxes[i]])
-
-    # 3) 首次載入頁面也同步一次
-    demo.load(sync_all, inputs=[b_cnt, c_cnt], outputs=b_boxes + c_boxes)
-
-    # 生成 JSON
-    gen_btn  = gr.Button("生成 JSON")
-    out_file = gr.File(label="⬇️ 下載 lightPara.json")
-
-    # 交錯 inputs: b0,c0,b1,c1,...
-    interleaved = [v for pair in zip(b_boxes, c_boxes) for v in pair]
-    gen_btn.click(create_json,
-                  inputs=[sk_file, b_cnt, c_cnt] + interleaved,
-                  outputs=out_file)
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0", server_port=8000)
 

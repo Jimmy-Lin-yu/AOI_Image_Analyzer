@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   aoi_image_analyzer:
     build:
@@ -23,7 +22,6 @@ services:
             - capabilities: [gpu]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      - DISPLAY=${DISPLAY}
 
   json_generator: 
     build:
@@ -48,7 +46,6 @@ services:
             - capabilities: [gpu]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      - DISPLAY=${DISPLAY}
   brightness_calculator:
     build:
       context: .
@@ -72,4 +69,3 @@ services:
             - capabilities: [gpu]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      - DISPLAY=${DISPLAY}
