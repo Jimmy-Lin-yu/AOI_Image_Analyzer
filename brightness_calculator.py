@@ -3,103 +3,220 @@ import cv2
 import numpy as np
 import tempfile
 import os
-import sys
+import zipfile
+import re
+import pandas as pd
 from yolo_model import YOLOImageProcessor
 
-class YOLOBrightnessCalculator:
+# 全局模型路徑，可根據需求修改
+MODEL_PATH = "/app/best.pt"
+USE_YOLO = os.getenv("USE_YOLO", "true").lower() in ("1", "true", "yes")
+# ---------- 單張圖 YOLO+亮度 ----------
+
+
+def process_and_calc_brightness(image: np.ndarray, use_yolo: bool = USE_YOLO):
     """
-    封裝 YOLO 裁切與平均亮度計算功能的類別。
-    使用方法：
-        calc = YOLOBrightnessCalculator(model_path)
-        crops, text = calc.process(image_np)
+    計算影像的平均亮度，
+    根據 use_yolo 參數決定是否使用 YOLO 推論。
+
+    參數:
+        image (np.ndarray): 原始 BGR 或灰階影像。
+        use_yolo (bool): 是否啟用 YOLO 模型裁切來計算各物件亮度。
+                          False 時直接以全影像計算。
+
+    回傳:
+        crops (List[np.ndarray]): 用於顯示的裁切圖 (若 use_yolo=False，則回傳原圖灰階版本)。
+        text (str): 亮度計算結果文字。
     """
-    def __init__(self, model_path: str):
-        if not os.path.isfile(model_path):
-            raise FileNotFoundError(f"找不到模型檔: {model_path}")
-        self.model_path = model_path
+    # 檢查輸入影像
+    if image is None:
+        return [], "❗️請先上傳圖片"
 
-    def process(self, image: np.ndarray):
-        """
-        Args:
-            image: numpy.ndarray (RGB 格式) 或 BGR 都可
-        Returns:
-            cropped_images: list[np.ndarray] 灰階裁切結果列表
-            result_text: str 計算後的文字說明
-        """
-        if image is None:
-            return [], "❗️ 請先提供影像"
+    # 若不使用 YOLO，直接計算整張影像亮度
+    if not use_yolo:
+        # 彩色轉灰階
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+        avg = float(np.mean(gray))
+        text = f"🔹 平均亮度 (全影像): {avg:.2f}"
+        return [gray], text
 
-        cropped_images = []
-        brightness_list = []
-        try:
-            with tempfile.TemporaryDirectory() as upload_dir, tempfile.TemporaryDirectory() as crop_dir:
-                # 存原始影像
-                in_path = os.path.join(upload_dir, "input.png")
-                bgr = image[:, :, ::-1] if image.ndim == 3 else image
-                cv2.imwrite(in_path, bgr)
+    # 以下為 use_yolo=True 時的流程
+    # 確認模型檔案存在
+    if not os.path.isfile(MODEL_PATH):
+        return [], f"❗️找不到模型: {MODEL_PATH}"
 
-                # YOLO 裁切
-                yolo = YOLOImageProcessor(self.model_path, upload_dir, crop_dir)
-                yolo.process_images()
+    crops, brightness_list = [], []
+    with tempfile.TemporaryDirectory() as upload_dir, tempfile.TemporaryDirectory() as crop_dir:
+        # 儲存輸入影像
+        in_path = os.path.join(upload_dir, "input.png")
+        bgr = image[:, :, ::-1] if image.ndim == 3 else image
+        cv2.imwrite(in_path, bgr)
 
-                # 計算裁切後每張影像亮度
-                for fn in sorted(os.listdir(crop_dir)):
-                    fp = os.path.join(crop_dir, fn)
-                    crop = cv2.imread(fp, cv2.IMREAD_GRAYSCALE)
-                    if crop is not None:
-                        cropped_images.append(crop)
-                        brightness_list.append(float(np.mean(crop)))
-        except Exception as e:
-            return [], f"🛑 錯誤：{e}"
+        # YOLO 推論並裁切
+        yolo = YOLOImageProcessor(MODEL_PATH, upload_dir, crop_dir)
+        yolo.process_images()
 
-        if not brightness_list:
-            return [], "ℹ️ 未偵測到任何物件"
+        # 讀取裁切結果並計算亮度
+        for fn in sorted(os.listdir(crop_dir)):
+            fp = os.path.join(crop_dir, fn)
+            crop = cv2.imread(fp, cv2.IMREAD_GRAYSCALE)
+            if crop is None:
+                continue
+            crops.append(crop)
+            brightness_list.append(float(np.mean(crop)))
 
-        # 組合結果文字
-        avg = sum(brightness_list) / len(brightness_list)
-        lines = [f"{i+1}. {v:.2f}" for i, v in enumerate(brightness_list)]
-        text = (
-            "🔹 各物件平均亮度:\n" + "\n".join(lines)
-            + f"\n\n⭐️ 整體平均: {avg:.2f}"
+    # 若未偵測到任何物件
+    if not brightness_list:
+        return [], "ℹ️ 未偵測到任何物件"
+
+    # 計算並組合結果文字
+    avg = sum(brightness_list) / len(brightness_list)
+    lines = [f"{i+1}. {v:.2f}" for i, v in enumerate(brightness_list)]
+    text = (
+        "🔹 各物件平均亮度:\n" +
+        "\n".join(lines) +
+        f"\n\n⭐️ 整體平均: {avg:.2f}"
+    )
+    return crops, text
+
+# ---------- 批量處理 Zip 圖片 ----------
+import tempfile, os, zipfile, subprocess
+
+def extract_zip_images(zip_file):
+    """
+    解壓 zip（支援 deflate 以外壓縮方法），回傳所有圖片檔路徑
+    zip_file: gr.File 返回物件，.name 屬性是本機暫存檔案路徑
+    """
+    tmp = tempfile.mkdtemp()
+    try:
+        with zipfile.ZipFile(zip_file.name, 'r') as zf:
+            zf.extractall(tmp)
+    except NotImplementedError:
+        # fallback to system unzip
+        subprocess.run(
+            ["unzip", "-o", zip_file.name, "-d", tmp],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        return cropped_images, text
+
+    # 遍歷資料夾收集圖片，並跳過檔名含 photometricStereo 的檔案
+    imgs = []
+    for root, _, files in os.walk(tmp):
+        for f in files:
+            low = f.lower()
+            # 如果檔名包含 photometricstereo，就忽略
+            if "photometricstereo" in low:
+                continue
+            if low.endswith(('.png','jpg','jpeg','bmp','tiff')):
+                imgs.append(os.path.join(root, f))
+    return imgs
 
 
-def launch_ui(model_path: str, port: int = 8800):
+def run_yolo_on_folder(image_paths):
+    """若 USE_YOLO=False，直接 copy 原圖回傳資料夾；否則跑 YOLO 裁切。"""
+    if not USE_YOLO:
+        tmp = tempfile.mkdtemp()
+        for p in image_paths:
+            dst = os.path.join(tmp, os.path.basename(p))
+            shutil.copy(p, dst)
+        return tmp
+
+    # below: 原本的 YOLO 流程
+    u = tempfile.mkdtemp()
+    c = tempfile.mkdtemp()
+    # 複製原圖到 u
+    for p in image_paths:
+        os.makedirs(
+            os.path.dirname(
+                os.path.join(
+                    u,
+                    os.path.relpath(p, os.path.commonpath(image_paths))
+                )
+            ),
+            exist_ok=True
+        )
+        cv2.imwrite(
+            os.path.join(
+                u,
+                os.path.relpath(p, os.path.commonpath(image_paths))
+            ),
+            cv2.imread(p)
+        )
+    yolo = YOLOImageProcessor(MODEL_PATH, u, c)
+    yolo.process_images()
+    return c
+
+
+def calc_brightness_folder(crop_dir):
+    """計算 crop_dir 所有裁切圖的亮度，回傳 dict{filename:brightness}"""
+    res={}
+    for fn in sorted(os.listdir(crop_dir)):
+        fp=os.path.join(crop_dir,fn)
+        img=cv2.imread(fp, cv2.IMREAD_GRAYSCALE)
+        if img is None: continue
+        res[fn]=float(np.mean(img))
+    return res
+
+
+def parse_filename_params(fname):
+    """從 filename 提取 W,R,G,B\d+，回傳 dict"""
+    params={}
+    for ch in ['W','R','G','B','H',"E"]:
+        m=re.search(fr"{ch}(\d+)", fname)
+        params[ch]=int(m.group(1)) if m else 0
+    return params
+
+def dataframe_from_records(records):
     """
-    啟動 Gradio 介面。
+    根據 records 建立 DataFrame，提取 filename 中的 D/W/R/G/B/H/E 參數，並輸出整理後的 CSV
+    返回 CSV 檔案路徑
     """
-    calc = YOLOBrightnessCalculator(model_path)
-    css = ".gradio-container{max-width:600px;margin:auto;padding:20px;} .gradio-row{margin-top:20px;}"
-    with gr.Blocks(css=css, title="YOLO + 平均亮度") as demo:
-        gr.Markdown("""
-        ### 🔍 YOLO + 平均亮度計算
-        上傳圖片，先執行 YOLO 裁切，再計算各裁切區平均灰階亮度。
-        """)
-        with gr.Row():
-            img_in = gr.Image(sources=["upload"], type="numpy", label="📂 上傳影像")
-        gallery = gr.Gallery(label="✂️ 裁切結果")
-        out_txt = gr.Textbox(label="🌟 結果", lines=8)
-        img_in.upload(calc.process, img_in, [gallery, out_txt])
-    demo.launch(server_name="0.0.0.0", server_port=port)
+    df = pd.DataFrame(records)
+    pattern = (
+        r"D(?P<D>\d+).*?"
+        r"W(?P<W>\d+).*?"
+        r"R(?P<R>\d+).*?"
+        r"G(?P<G>\d+).*?"
+        r"B(?P<B>\d+).*?"
+        r"H(?P<H>\d+).*?"
+        r"E(?P<E>\d+)"
+    )
+    params = df['filename'].str.extract(pattern)
+    params = params.fillna(0).astype(int)
+    df_final = pd.concat([params, df['brightness'].rename('Br')], axis=1)
+    out_csv = os.path.abspath('results.csv')
+    df_final.to_csv(out_csv, index=False)
+    return out_csv
 
+def main(zip_file):
+    """
+    主流程：解壓 zip -> YOLO 裁切 -> 計算亮度 -> 生成 CSV
+    返回 CSV 檔案路徑
+    """
+    records = []
+    imgs = extract_zip_images(zip_file)
+    crop_dir = run_yolo_on_folder(imgs)
+    brightness_map = calc_brightness_folder(crop_dir)
+    for fn, bri in brightness_map.items():
+        params = parse_filename_params(fn)
+        rec = {'filename': fn, 'brightness': bri}
+        rec.update(params)
+        records.append(rec)
+    return dataframe_from_records(records)
 
+# ---------- Gradio UI ----------
+with gr.Blocks() as demo:
+    with gr.Tabs():
+        with gr.TabItem("單張圖片處理"):
+            img_in=gr.Image(type="numpy")
+            gallery=gr.Gallery()
+            txt=gr.Textbox()
+            img_in.upload(process_and_calc_brightness, img_in, [gallery, txt])
+        with gr.TabItem("zip檔案處理"):
+            zip_in=gr.File(file_types=['.zip','.zup'], label="📦 上傳壓縮檔 (ZIP/ZUP)")
+            btn=gr.Button("處理 ZIP 並下載 CSV")
+            out=gr.File(label="⬇️ 下載 results.csv")
+            btn.click(main, zip_in, out)
 if __name__ == "__main__":
-    # CLI 用法：
-    #   python brightness_yolo_gradio.py /path/to/image.png /path/to/model.pt
-    #CLI 模式：提供 python brightness_yolo_gradio.py input.png model.pt，會在終端印出文字結果，方便從程式直接呼叫
-    if len(sys.argv) == 3:
-        img_path, model_path = sys.argv[1:]
-        if not os.path.isfile(img_path):
-            print(f"找不到影像: {img_path}")
-            sys.exit(1)
-        calc = YOLOBrightnessCalculator(model_path)
-        img = cv2.imread(img_path)
-        crops, text = calc.process(img)
-        print(text)
-    #UI 模式：若未傳入兩個參數，會預設讀 MODEL_PATH 並啟動 Gradio 介面。
-    else:
-        # 啟動 UI
-        MODEL_PATH = "/app/best.pt"  # 修改為實際模型
-        launch_ui(MODEL_PATH, port=8800)
-
+    # 在此修改模型路徑
+    MODEL_PATH = "/app/best.pt"
+    demo.launch(server_name="0.0.0.0", server_port=8800)

@@ -19,3 +19,7 @@ __pycache__/app.cpython-310.pyc
 *.pth
 *.log
 *.txt
+*.csv
+*.zip
+*.tar
+*.tar.gz
