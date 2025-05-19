@@ -117,6 +117,80 @@ def create_json(sk_path, b_cnt, c_cnt, *txts):
     return out
 
 ###################################
+# 3.WRGB 等分組合 JSON 排列組合
+###################################
+
+def create_division_color_json(sk_file, model, w_max, r_max, g_max, b_max, divisions):
+    """
+    根據上傳的骨架 JSON、選擇的模型，
+    將 W、R、G、B 四個通道的最大值各自分為指定等分，
+    並對所有通道值做排列組合，生成新的 scenes JSON。
+    回傳輸出檔案名稱。
+    """
+    import json
+
+    # 讀取骨架 JSON
+    path = sk_file.name
+    with open(path, encoding='utf-8') as f:
+        data = json.load(f)
+
+    # 保留 "device" 設定
+    new_data = {}
+    if 'device' in data:
+        new_data['device'] = data['device']
+
+    # 取得對應的模型節點
+    key = KEY_MAP[model]
+    node = data.get(key)
+    if node is None:
+        raise KeyError(f"模型 {model} 對應的 KEY_MAP:{key} 不存在於骨架 JSON")
+
+    # 將最大值分為等分
+    def divide(max_val, parts):
+        if max_val == 0:
+            return [0]
+        step = max_val / parts
+        # 生成從 1 到 max 的 (parts+1) 個值
+        return [int(round(step * i)) for i in range(1, parts + 1)]
+
+    w_vals = divide(int(w_max), int(divisions))
+    r_vals = divide(int(r_max), int(divisions))
+    g_vals = divide(int(g_max), int(divisions))
+    b_vals = divide(int(b_max), int(divisions))
+
+    # 生成所有通道的排列組合
+    scenes = []
+    for cw in w_vals:
+        for cr in r_vals:
+            for cg in g_vals:
+                for cb in b_vals:
+                    scenes.append({
+                        "brightness": 1024,       # 可根據需求調整 brightness 欄位
+                        "colors": [cw, cr, cg, cb],
+                        "currentZone": 0,
+                        "zoneMode": 0
+                    })
+
+    # 深拷貝節點並附加新的 scenes 列表
+    if isinstance(node, list):
+        entries = []
+        for entry in node:
+            entry_copy = {k: v for k, v in entry.items() if k != 'scenes'}
+            entry_copy['scenes'] = scenes
+            entries.append(entry_copy)
+        new_data[key] = entries
+    else:
+        entry_copy = {k: v for k, v in node.items() if k != 'scenes'}
+        entry_copy['scenes'] = scenes
+        new_data[key] = entry_copy
+
+    # 輸出 JSON
+    out_fname = f"divisions_{key}.json"
+    with open(out_fname, 'w', encoding='utf-8') as f:
+        json.dump(new_data, f, ensure_ascii=False, indent=4)
+    return out_fname
+
+###################################
 # 建立 Gradio 介面
 ###################################
 with gr.Blocks(title="自動打光JSON生成器") as demo:
@@ -170,6 +244,22 @@ with gr.Blocks(title="自動打光JSON生成器") as demo:
                 outputs=out_file
             )
 
+        # 新增第三頁：等分組合生成
+        with gr.TabItem("WRGB 等分組合生成"):
+            sk_div = gr.File(label="📄 上傳骨架 JSON")
+            model_div = gr.Dropdown(MODELS, label="選擇模型")
+            w_max = gr.Number(label="W(Max)")
+            r_max = gr.Number(label="R(Max)")
+            g_max = gr.Number(label="G(Max)")
+            b_max = gr.Number(label="B(Max)")
+            divisions = gr.Number(label="等分數量", value=1, precision=0)
+            gen_div_btn = gr.Button("生成等分組合JSON")
+            out_div_file = gr.File(label="⬇️ 下載 JSON")
+            gen_div_btn.click(
+                fn=create_division_color_json,
+                inputs=[sk_div, model_div, w_max, r_max, g_max, b_max, divisions],
+                outputs=out_div_file
+            )
 
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0", server_port=8000)
