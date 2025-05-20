@@ -1,7 +1,11 @@
 import gradio as gr
 import json
-import itertools
-import os
+import tempfile
+import numpy as np
+from pathlib import Path
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+
 # ---------------- 基本設定 ----------------
 MODELS = ["全色域環形100", "全色域條形30100", "全色域同軸60",
           "4層4角度全圓88", "全色域圓頂120"]
@@ -189,6 +193,229 @@ def create_division_color_json(sk_file, model, w_max, r_max, g_max, b_max, divis
     with open(out_fname, 'w', encoding='utf-8') as f:
         json.dump(new_data, f, ensure_ascii=False, indent=4)
     return out_fname
+###################################
+# 4.WRGB  抽樣打光 JSON 排列組合
+###################################
+
+def train_channel_models(
+    w_csv, r_csv, g_csv, b_csv,
+    w_range=(0,1024), r_range=(0,1024), g_range=(0,1024), b_range=(0,1024)
+):
+    """
+    只做一次項線性回歸。
+    回傳兩份 dict：
+        funcs   : {"W": f_w(x), ...}
+        params  : {"W": (coef, intercept), ...}
+    """
+    out_f, out_p = {}, {}
+    for ch, csv_path, rng in zip(
+        ["W","R","G","B"], 
+        [w_csv,r_csv,g_csv,b_csv],
+        [w_range,r_range,g_range,b_range]
+    ):
+        # 缺通道
+        if csv_path is None:
+            out_f[ch] = (lambda x: 0.0)
+            out_p[ch] = (0.0, 0.0)
+            continue
+
+        df = pd.read_csv(csv_path)
+        lo, hi = rng
+        df = df[(df[ch]>=lo) & (df[ch]<=hi)]
+        if df.empty:
+            raise ValueError(f"{csv_path} 在 {rng} 區間無資料")
+        X = df[[ch]].values; y = df["Br"].values
+        lin = LinearRegression().fit(X, y)
+        a, b = float(lin.coef_[0]), float(lin.intercept_)
+        # 避免 late-binding
+        out_f[ch] = (lambda m: (lambda x: float(m.predict([[x]]))))(lin)
+        out_p[ch] = (a, b)
+    return out_f, out_p
+
+# ----------------------------------------------------------------------
+# 把四個一次項函式相加，並 clip 在 [y_min, y_max]
+# ----------------------------------------------------------------------
+def sum_brightness_func(
+    params: dict[str, tuple],          
+    y_min: float,
+    y_max: float
+):
+    """
+    依 4 組 (coef, intercept) 組成總亮度函式，
+    並在回傳值階段 clip 至 [y_min, y_max]。
+    額外回傳可讀文字公式 (含各通道截距)。
+    """
+    a_w, b_w = params["W"]
+    a_r, b_r = params["R"]
+    a_g, b_g = params["G"]
+    a_b, b_b = params["B"]
+    inter_total = b_w + b_r + b_g + b_b
+
+    # 文字公式只保留非零係數
+    terms_txt = []
+    if a_w: terms_txt.append(f"{a_w:.4g}·W")
+    if a_r: terms_txt.append(f"{a_r:.4g}·R")
+    if a_g: terms_txt.append(f"{a_g:.4g}·G")
+    if a_b: terms_txt.append(f"{a_b:.4g}·B")
+
+    coef_txt = " + ".join(terms_txt) if terms_txt else "0"
+    intercept_parts = []
+    if b_w: intercept_parts.append(f"W:{b_w:.4g}")
+    if b_r: intercept_parts.append(f"R:{b_r:.4g}")
+    if b_g: intercept_parts.append(f"G:{b_g:.4g}")
+    if b_b: intercept_parts.append(f"B:{b_b:.4g}")
+    intercept_txt = ", ".join(intercept_parts) or "0"
+
+    func_expr = (
+        f"y = {coef_txt} + {inter_total:.4g} "
+        f"({intercept_txt}) [clipped {y_min}–{y_max}]"
+    )
+    # 數值函式
+    def _f(w, r, g, b):
+        val = a_w*w + a_r*r + a_g*g + a_b*b + inter_total
+        return max(y_min, min(y_max, val))
+
+    return _f, func_expr
+
+# ------------------------------------------------------------
+#  隨機抽樣工具 -------------------------------------------
+# ------------------------------------------------------------
+def sample_wrbg_combos(
+    params: dict[str, tuple],   # {"W": (a,b), ...}
+    w_max, r_max, g_max, b_max,
+    br_min, br_max,
+    sample_cnt,
+    rng_seed=None,
+    max_attempt_factor=20,
+):
+    """
+    隨機抽樣 WRGB；用「完整一次項公式 + 四通道截距」做篩選，
+    要求 y_raw 介於 [br_min, br_max]。
+    回傳 List[[W,R,G,B]]，長度 = sample_cnt
+    """
+    a_w, b_w = params["W"]
+    a_r, b_r = params["R"]
+    a_g, b_g = params["G"]
+    a_b, b_b = params["B"]
+    intercept_sum = b_w + b_r + b_g + b_b
+
+    rng        = np.random.default_rng(rng_seed)
+    N          = int(sample_cnt)
+    combos     = []
+    attempts   = 0
+    max_tries  = N * max_attempt_factor
+
+    while len(combos) < N and attempts < max_tries:
+        attempts += 1
+        cw = rng.integers(0, w_max + 1)
+        cr = rng.integers(0, r_max + 1)
+        cg = rng.integers(0, g_max + 1)
+        cb = rng.integers(0, b_max + 1)
+
+        y_raw = (
+            a_w * cw + a_r * cr + a_g * cg + a_b * cb + intercept_sum
+        )
+
+        if br_min <= y_raw <= br_max:
+            combos.append([int(cw), int(cr), int(cg), int(cb)])
+
+    if len(combos) < N:
+        raise ValueError(
+            f"嘗試 {attempts} 次仍僅找到 {len(combos)} 組；"
+            f"請放寬亮度範圍或提高通道上限"
+        )
+    return combos
+
+
+def generate_sampling_json(
+    sk_file,
+    model_div,              # Gradio File 物件 (骨架 JSON)
+    w_csv, r_csv, g_csv, b_csv,  # 四通道 CSV (Gradio File)
+    w_max, r_max, g_max, b_max,  # 四通道強度上限 (Number)
+    br_min, br_max,              # Brightness 範圍
+    sample_cnt,                  # 抽樣組數
+):
+    """隨機抽樣 WRGB 組合並寫入骨架 JSON。
+
+    步驟：
+    1. 讀四個 CSV → 以自動階數訓練四個 brightness 函式。
+    2. 將四函式加總 → comb_func(w,r,g,b)，並於呼叫時 clip 到 br_min, br_max。
+    3. 在 4-維區間 (0~各自 max) 隨機抽 sample_cnt 組整數強度；
+       若 comb_func 落在 [br_min,br_max] 就保留。
+    4. 把保留組合塞進骨架 JSON 的第一個含 scenes 的節點，並輸出新 JSON。
+    """
+
+    # ---- 1. 一次項模型 & 亮度公式 ----------------------
+    funcs, params = train_channel_models(
+        w_csv.name if w_csv else None,
+        r_csv.name if r_csv else None,
+        g_csv.name if g_csv else None,
+        b_csv.name if b_csv else None,
+    )
+    comb_func, func_expr = sum_brightness_func(
+        params, y_min=float(br_min), y_max=float(br_max)
+    )
+
+    # 若通道缺失 → 對應 max 一律設 0，避免抽到非 0
+    w_max = 0 if w_csv is None else int(w_max)
+    r_max = 0 if r_csv is None else int(r_max)
+    g_max = 0 if g_csv is None else int(g_max)
+    b_max = 0 if b_csv is None else int(b_max)
+
+    # ---- 2. 隨機抽樣 -----------------------------------
+    try:
+        combos = sample_wrbg_combos(
+            params,
+            w_max=int(w_max), r_max=int(r_max),
+            g_max=int(g_max), b_max=int(b_max),
+            br_min=float(br_min), br_max=float(br_max),
+            sample_cnt=int(sample_cnt)
+        )
+    except ValueError as err:           # ← 只抓這一種
+        func_expr += f"\n⚠️ {err}"      #   把訊息加到同一行文字
+        # 直接回傳：JSON 為 None、公式文字含警示
+        return None, func_expr
+    
+    # ---- 3. 3. 讀骨架 JSON & 寫入 scenes --------------------------------
+    with open(sk_file.name, encoding="utf-8") as f:
+        data = json.load(f)
+
+    new_data = {"device": data.get("device", {})}
+
+    # 依 model_div 從 KEY_MAP 找節點
+    key = KEY_MAP.get(model_div, model_div)
+    node = data.get(key)
+    if node is None:
+        raise KeyError(f"骨架 JSON 找不到 key={key}")
+
+    scenes = [
+        {
+            "brightness": 1024,
+            "colors": combo,
+            "currentZone": 0,
+            "zoneMode": 0,
+        }
+        for combo in combos
+    ]
+
+    # 深拷貝替換 scenes
+    if isinstance(node, list):
+        new_node = [
+            {**{k: v for k, v in ent.items() if k != "scenes"}, "scenes": scenes}
+            for ent in node
+        ]
+    else:
+        new_node = {**{k: v for k, v in node.items() if k != "scenes"}, "scenes": scenes}
+
+    new_data[key] = new_node
+
+    # ---------- 4. 輸出 ----------------------------------
+    out_json = Path(tempfile.mkdtemp()) / f"wrgb_sampling_{key}.json"
+    with open(out_json, "w", encoding="utf-8") as f:
+        json.dump(new_data, f, ensure_ascii=False, indent=4)
+
+    return str(out_json), func_expr
+
 
 ###################################
 # 建立 Gradio 介面
@@ -260,6 +487,49 @@ with gr.Blocks(title="自動打光JSON生成器") as demo:
                 inputs=[sk_div, model_div, w_max, r_max, g_max, b_max, divisions],
                 outputs=out_div_file
             )
+        # 新增第四頁：WRGB 抽樣打光矩陣生成
+        with gr.TabItem("WRGB 抽樣打光矩陣"):
+            # 1) 骨架 JSON
+            sk_in = gr.File(label="📄 上傳骨架 JSON", file_types=[".json"])
+            model_div = gr.Dropdown(MODELS, label="選擇模型")
+            # 2) 四個通道的 CSV
+            with gr.Row():
+                w_csv = gr.File(label="W 通道 CSV", file_types=[".csv"])
+                r_csv = gr.File(label="R 通道 CSV", file_types=[".csv"])
+                g_csv = gr.File(label="G 通道 CSV", file_types=[".csv"])
+                b_csv = gr.File(label="B 通道 CSV", file_types=[".csv"])
+
+            # 3) 四個通道的強度上限 (0–1024，各自可不同)
+            with gr.Row():
+                w_max = gr.Number(label="W 上限", value=1024, precision=0)
+                r_max = gr.Number(label="R 上限", value=1024, precision=0)
+                g_max = gr.Number(label="G 上限", value=1024, precision=0)
+                b_max = gr.Number(label="B 上限", value=1024, precision=0)
+
+            # 4) Brightness (Br) 的允許範圍
+            with gr.Row():
+                br_min = gr.Number(label="Br 最小值", value=0)
+                br_max = gr.Number(label="Br 最大值", value=1024)
+
+            # 5) 4-維空間內的抽樣數量
+            sample_cnt = gr.Number(label="抽樣組數 (N)", value=200, precision=0)
+
+            # 生成 JSON 按鈕 & 下載元件
+            gen_btn  = gr.Button("生成抽樣 JSON")
+            out_json = gr.File(label="⬇️ 下載 JSON")
+            func_box = gr.Textbox(label="合成亮度函式", lines=2)
+
+            gen_btn.click(
+                fn=generate_sampling_json,          # 你在 wrgb_sampler.py 內實作的新函式
+                inputs=[
+                    sk_in,model_div, w_csv, r_csv, g_csv, b_csv,
+                    w_max, r_max, g_max, b_max,
+                    br_min, br_max,
+                    sample_cnt
+                ],
+                outputs=[out_json, func_box]
+            )
+
 
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0", server_port=8000)
