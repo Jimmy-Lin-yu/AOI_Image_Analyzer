@@ -2,11 +2,13 @@ import gradio as gr
 import cv2
 import numpy as np
 import tempfile
+from pathlib import Path
 import os
 import zipfile
 import re
 import pandas as pd
 from yolo_model import YOLOImageProcessor
+from wrgb_fit_regression import BrightnessRegression
 
 # 全局模型路徑，可根據需求修改
 MODEL_PATH = "/app/best.pt"
@@ -187,6 +189,31 @@ def dataframe_from_records(records):
     df_final.to_csv(out_csv, index=False)
     return out_csv
 
+def wrgb_regression(csv_file):
+    """
+    上傳 results.csv 之後：
+    1) 先跑 degree=1；若 R² < 0.99 再跑 degree=2，擇優
+    2) 依最終階數畫殘差圖 & 單通道擬合圖
+    3) 回傳 [殘差圖, 擬合圖] 路徑 + 報告文字
+    """
+    if csv_file is None:
+        return [], "❗️請先上傳 CSV 檔"
+
+    # 建立回歸物件
+    reg = BrightnessRegression(csv_file.name)
+
+    # 一鍵自動擬合 + 畫圖（channel='auto' 會自行挑有值的 WRGB 通道）
+    info = reg.auto_fit_and_plot(channel="auto")   # or channel="W" 若一定要 W
+
+    # 報告文字
+    report = (
+        f"◆ 採用階數: {info['degree']}\n"
+        f"◆ 全特徵訓練 R²: {info['r2']:.4f}"
+    )
+
+    # 回傳圖檔路徑（殘差圖, 擬合圖）與報告
+    return [info["residual_png"], info["univariate_png"]], report
+
 def main(zip_file):
     """
     主流程：解壓 zip -> YOLO 裁切 -> 計算亮度 -> 生成 CSV
@@ -216,6 +243,16 @@ with gr.Blocks() as demo:
             btn=gr.Button("處理 ZIP 並下載 CSV")
             out=gr.File(label="⬇️ 下載 results.csv")
             btn.click(main, zip_in, out)
+        with gr.TabItem("WRGB迴歸分析"):
+            csv_in = gr.File(file_types=['.csv'], label="📄 上傳 results.csv")
+            run_btn = gr.Button("執行 WRGB 迴歸分析")
+            gallery = gr.Gallery(label="殘差圖 & 擬合圖", columns=2, height="auto")
+            report  = gr.Textbox(label="分析報告", lines=3)
+            run_btn.click(
+                fn=wrgb_regression,
+                inputs=[csv_in],
+                outputs=[gallery, report]
+            )
 if __name__ == "__main__":
     # 在此修改模型路徑
     MODEL_PATH = "/app/best.pt"
