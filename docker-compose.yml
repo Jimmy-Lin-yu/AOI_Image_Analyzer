@@ -11,7 +11,7 @@ services:
       - .:/app  # 將 app 資料夾掛載進容器中
     working_dir: /app
     command: python3 gradio_app.py
-    #command: sleep 10000
+    # command: sleep 10000
     stdin_open: true
     tty: true
     shm_size: '16gb'

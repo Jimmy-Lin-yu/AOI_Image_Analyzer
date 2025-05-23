@@ -10,6 +10,9 @@ import pandas as pd
 from yolo_model import YOLOImageProcessor
 from wrgb_fit_regression import BrightnessRegression
 
+base_tmp = tempfile.gettempdir()
+os.makedirs(base_tmp, exist_ok=True)
+
 # 全局模型路徑，可根據需求修改
 MODEL_PATH = "/app/best.pt"
 USE_YOLO = os.getenv("USE_YOLO", "true").lower() in ("1", "true", "yes")
@@ -82,34 +85,69 @@ def process_and_calc_brightness(image: np.ndarray, use_yolo: bool = USE_YOLO):
     return crops, text
 
 # ---------- 批量處理 Zip 圖片 ----------
-import tempfile, os, zipfile, subprocess
+
+
+import os
+import tempfile
+import zipfile
+import subprocess
+import shutil
 
 def extract_zip_images(zip_file):
     """
-    解壓 zip（支援 deflate 以外壓縮方法），回傳所有圖片檔路徑
+    解壓 zip（支援 deflate 以外壓縮方法），
+    捕捉 Errno 36: File name too long，只保留到第一組 WRGB (第一個 B\d+) 的部分。
+    回傳所有圖片檔路徑。
     zip_file: gr.File 返回物件，.name 屬性是本機暫存檔案路徑
     """
     tmp = tempfile.mkdtemp()
+    imgs = []
     try:
         with zipfile.ZipFile(zip_file.name, 'r') as zf:
-            zf.extractall(tmp)
+            for info in zf.infolist():
+                filename = os.path.basename(info.filename)
+                low = filename.lower()
+                if "photometricstereo" in low:
+                    continue
+                if not low.endswith(('.png','jpg','jpeg','bmp','tiff')):
+                    continue
+
+                try:
+                    # 正常解壓
+                    zf.extract(info, tmp)
+                    imgs.append(os.path.join(tmp, info.filename))
+                except OSError as e:
+                    if e.errno == 36:
+                        # 只保留到第一個 B\d+（即第一組 WRGB 資料）
+                        name, ext = os.path.splitext(filename)
+                        m = re.match(r"(.+?B\d+)", name)
+                        clipped = m.group(1) if m else name
+                        safe_name = f"{clipped}{ext}"
+                        target = os.path.join(tmp, safe_name)
+
+                        # 手動寫檔
+                        with zf.open(info) as src, open(target, 'wb') as dst:
+                            shutil.copyfileobj(src, dst)
+                        imgs.append(target)
+                    else:
+                        raise
     except NotImplementedError:
-        # fallback to system unzip
+        # fallback 到系統 unzip，不做再剪裁了
         subprocess.run(
             ["unzip", "-o", zip_file.name, "-d", tmp],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
 
-    # 遍歷資料夾收集圖片，並跳過檔名含 photometricStereo 的檔案
-    imgs = []
-    for root, _, files in os.walk(tmp):
-        for f in files:
-            low = f.lower()
-            # 如果檔名包含 photometricstereo，就忽略
-            if "photometricstereo" in low:
-                continue
-            if low.endswith(('.png','jpg','jpeg','bmp','tiff')):
-                imgs.append(os.path.join(root, f))
+    # 若上面沒任何檔案，才去遍歷一次
+    if not imgs:
+        for root, _, files in os.walk(tmp):
+            for f in files:
+                low = f.lower()
+                if "photometricstereo" in low:
+                    continue
+                if low.endswith(('.png','jpg','jpeg','bmp','tiff')):
+                    imgs.append(os.path.join(root, f))
+
     return imgs
 
 
@@ -168,27 +206,21 @@ def parse_filename_params(fname):
     return params
 
 def dataframe_from_records(records):
-    """
-    根據 records 建立 DataFrame，提取 filename 中的 D/W/R/G/B/H/E 參數，並輸出整理後的 CSV
-    返回 CSV 檔案路徑
-    """
     df = pd.DataFrame(records)
-    pattern = (
-        r"D(?P<D>\d+).*?"
-        r"W(?P<W>\d+).*?"
-        r"R(?P<R>\d+).*?"
-        r"G(?P<G>\d+).*?"
-        r"B(?P<B>\d+).*?"
-        r"H(?P<H>\d+).*?"
-        r"E(?P<E>\d+)"
-    )
-    params = df['filename'].str.extract(pattern)
-    params = params.fillna(0).astype(int)
+    def parse(fname):
+        vals = {}
+        for ch in ['D','W','R','G','B','H','E']:
+            m = re.search(fr"{ch}(\d+)", fname, re.IGNORECASE)
+            vals[ch] = int(m.group(1)) if m else 0
+        return vals
+
+    # 對每個 filename 呼叫 parse，回傳 dict 做成新的 DataFrame
+    params = pd.DataFrame([parse(f) for f in df['filename']])
     df_final = pd.concat([params, df['brightness'].rename('Br')], axis=1)
     out_csv = os.path.abspath('results.csv')
     df_final.to_csv(out_csv, index=False)
     return out_csv
-
+    
 def wrgb_regression(csv_file):
     """
     上傳 results.csv 之後：
@@ -231,7 +263,7 @@ def main(zip_file):
     return dataframe_from_records(records)
 
 # ---------- Gradio UI ----------
-with gr.Blocks() as demo:
+with gr.Blocks(title="亮度分析與迴歸分析") as demo:
     with gr.Tabs():
         with gr.TabItem("單張圖片處理"):
             img_in=gr.Image(type="numpy")

@@ -257,7 +257,7 @@ def show_flagged_data():
         df["Timestamp"] = pd.to_datetime(df["uploaded_image"].apply(lambda f: datetime.fromtimestamp(os.path.getctime(f)) if os.path.exists(f) else pd.NaT))
 
         top5 = df.sort_values(by="Total Quality", ascending=False).head(5)
-
+        print("⚠️ 讀取成功：", top5)
         return top5[["Image", "Sharpness", "Exposure", "Contrast", "Uniformity", "Defect", "Total Quality", "Timestamp"]]
 
     except Exception as e:
@@ -345,7 +345,7 @@ def clear_images_csv():
 
 
 # ------------------ Gradio UI ------------------
-with gr.Blocks() as demo:
+with gr.Blocks(title="成像品質評分系統") as demo:
     demo.flagging_dir = ".gradio/flagged"
     demo.allow_flagging = "manual"
 
