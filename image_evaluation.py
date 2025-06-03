@@ -13,7 +13,7 @@ class ImageQualityAnalyzer:
         "contrast": (50, 30),
         "uniformity": (70, 50),
         # "noise": (60, 40),
-        "defect": (100, 50)
+        # "defect": (100, 50)
     }
 
 
@@ -223,67 +223,67 @@ class ImageQualityAnalyzer:
 
 
 #---------------------------------------黑點瑕疵(defect)-----------------------------------------------
-    @staticmethod
-    def _segment_roi(gray: np.ndarray,
-                     canny_thresh1=50, canny_thresh2=150,
-                     morph_kernel=(5,5)) -> np.ndarray:
-        """
-        由灰階圖建立一個 single‐channel ROI mask (bool array)，
-        物件內部為 True，背景為 False。
-        """
-        blur = cv2.GaussianBlur(gray, (5,5), 0)
-        edges = cv2.Canny(blur, canny_thresh1, canny_thresh2)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, morph_kernel)
-        closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
-        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            # 找不到就整圖當 ROI
-            return np.ones_like(gray, dtype=bool)
-        cnt = max(contours, key=cv2.contourArea)
-        mask = np.zeros_like(gray, dtype=np.uint8)
-        cv2.drawContours(mask, [cnt], -1, 255, cv2.FILLED)
-        return mask.astype(bool)
+    # @staticmethod
+    # def _segment_roi(gray: np.ndarray,
+    #                  canny_thresh1=50, canny_thresh2=150,
+    #                  morph_kernel=(5,5)) -> np.ndarray:
+    #     """
+    #     由灰階圖建立一個 single‐channel ROI mask (bool array)，
+    #     物件內部為 True，背景為 False。
+    #     """
+    #     blur = cv2.GaussianBlur(gray, (5,5), 0)
+    #     edges = cv2.Canny(blur, canny_thresh1, canny_thresh2)
+    #     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, morph_kernel)
+    #     closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+    #     contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    #     if not contours:
+    #         # 找不到就整圖當 ROI
+    #         return np.ones_like(gray, dtype=bool)
+    #     cnt = max(contours, key=cv2.contourArea)
+    #     mask = np.zeros_like(gray, dtype=np.uint8)
+    #     cv2.drawContours(mask, [cnt], -1, 255, cv2.FILLED)
+    #     return mask.astype(bool)
 
-    @staticmethod
-    def calculate_defect_score(image: np.ndarray,
-                               dark_thresh: int = 50,
-                               max_defect_ratio: float = 0.05,
-                               border: int = 20) -> float:
-        """
-        把外圈和背景切成白，僅在 ROI 裡面偵測黑點瑕疵，
-        缺陷越多分數越高 (0–100)。
-        """
-        # 0. 灰階
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        h, w = gray.shape
+    # @staticmethod
+    # def calculate_defect_score(image: np.ndarray,
+    #                            dark_thresh: int = 50,
+    #                            max_defect_ratio: float = 0.05,
+    #                            border: int = 20) -> float:
+    #     """
+    #     把外圈和背景切成白，僅在 ROI 裡面偵測黑點瑕疵，
+    #     缺陷越多分數越高 (0–100)。
+    #     """
+    #     # 0. 灰階
+    #     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    #     h, w = gray.shape
 
-        # 1. 分割 ROI
-        obj_mask = ImageQualityAnalyzer._segment_roi(gray)
+    #     # 1. 分割 ROI
+    #     obj_mask = ImageQualityAnalyzer._segment_roi(gray)
 
-        # 2. 擴一點 ROI，並剔除圖邊
-        obj_mask[:border, :] = False
-        obj_mask[-border:, :] = False
-        obj_mask[:, :border] = False
-        obj_mask[:, -border:] = False
+    #     # 2. 擴一點 ROI，並剔除圖邊
+    #     obj_mask[:border, :] = False
+    #     obj_mask[-border:, :] = False
+    #     obj_mask[:, :border] = False
+    #     obj_mask[:, -border:] = False
 
-        # 3. 在 ROI 內找黑點 (灰階值 small than threshold)
-        defects = (gray < dark_thresh) & obj_mask
+    #     # 3. 在 ROI 內找黑點 (灰階值 small than threshold)
+    #     defects = (gray < dark_thresh) & obj_mask
 
-        # 4. 去除貼邊的小 blob（可選）
-        num, labels, stats, _ = cv2.connectedComponentsWithStats(defects.astype(np.uint8), connectivity=8)
-        clean = np.zeros_like(defects)
-        for lab in range(1, num):
-            x,y,ww,hh,area = stats[lab]
-            # 只保留不貼邊的小瑕疵
-            if x>0 and y>0 and x+ww< w and y+hh< h:
-                clean[labels==lab] = True
+    #     # 4. 去除貼邊的小 blob（可選）
+    #     num, labels, stats, _ = cv2.connectedComponentsWithStats(defects.astype(np.uint8), connectivity=8)
+    #     clean = np.zeros_like(defects)
+    #     for lab in range(1, num):
+    #         x,y,ww,hh,area = stats[lab]
+    #         # 只保留不貼邊的小瑕疵
+    #         if x>0 and y>0 and x+ww< w and y+hh< h:
+    #             clean[labels==lab] = True
 
-        # 5. 計算缺陷比例與分數
-        roi_area = obj_mask.sum() or 1
-        ratio    = clean.sum() / float(roi_area)
-        norm     = min(ratio, max_defect_ratio) / max_defect_ratio
-        score    = norm * 100.0
-        return float(score)
+    #     # 5. 計算缺陷比例與分數
+    #     roi_area = obj_mask.sum() or 1
+    #     ratio    = clean.sum() / float(roi_area)
+    #     norm     = min(ratio, max_defect_ratio) / max_defect_ratio
+    #     score    = norm * 100.0
+    #     return float(score)
 
 
 
@@ -304,7 +304,7 @@ class ImageQualityAnalyzer:
         Overall Quality (%) = (Average Score / 5) * 100
         """
         scores = []
-        for key in ["sharpness", "exposure", "contrast", "uniformity", "defect"]:
+        for key in ["sharpness", "exposure", "contrast", "uniformity"]:
             value = metrics.get(key, 0)
             high, mid = cls.thresholds[key]
             
@@ -345,7 +345,7 @@ class ImageQualityAnalyzer:
                 "contrast": self.calculate_contrast(image),
                 "uniformity": self.calculate_light_uniformity(image),
                 #"noise": self.calculate_noise(image),
-                "defect": self.calculate_defect_score(image)
+                # "defect": self.calculate_defect_score(image)
             }
             
             # 依據閾值計算分數與總品質
@@ -360,7 +360,6 @@ class ImageQualityAnalyzer:
 
 if __name__ == "__main__":
     # Change this to your images folder path
-    folder = r"D:\Users\JimmyLin\Desktop\AOI\OpenCV\images"
     analyzer = ImageQualityAnalyzer(folder)
     analyzer.process_evaluate()
 

@@ -168,7 +168,7 @@ def quality_analysis_on_cropped(crop_folder, csv_path):
                 "exposure": analyzer.calculate_exposure(image),
                 "contrast": analyzer.calculate_contrast(image),
                 "uniformity": analyzer.calculate_light_uniformity(image),
-                "defect": analyzer.calculate_defect_score(image)
+                # "defect": analyzer.calculate_defect_score(image)
             }
             scores, total = ImageQualityAnalyzer.evaluate_quality(metrics)
             output_text = "影像品質分析結果：\n"
@@ -227,7 +227,7 @@ def show_flagged_data():
     try:
         csv_path = os.path.join(".gradio", "flagged", "dataset1.csv")
         if not os.path.exists(csv_path):
-            return pd.DataFrame(columns=["Image","Total Quality","Sharpness", "Exposure", "Contrast", "Uniformity", "Defect", "Timestamp"])
+            return pd.DataFrame(columns=["Image","Total Quality","Sharpness", "Exposure", "Contrast", "Uniformity", "Timestamp"])
 
         df = pd.read_csv(csv_path)
 
@@ -251,14 +251,14 @@ def show_flagged_data():
         df["Exposure"] = df["output"].apply(lambda x: extract_metric(x, "Exposure"))
         df["Contrast"] = df["output"].apply(lambda x: extract_metric(x, "Contrast"))
         df["Uniformity"] = df["output"].apply(lambda x: extract_metric(x, "Uniformity"))
-        df["Defect"] = df["output"].apply(lambda x: extract_metric(x, "Defect"))
+        # df["Defect"] = df["output"].apply(lambda x: extract_metric(x, "Defect"))
 
         df["Image"] = df["uploaded_image"].apply(os.path.basename)
         df["Timestamp"] = pd.to_datetime(df["uploaded_image"].apply(lambda f: datetime.fromtimestamp(os.path.getctime(f)) if os.path.exists(f) else pd.NaT))
 
         top5 = df.sort_values(by="Total Quality", ascending=False).head(5)
         print("⚠️ 讀取成功：", top5)
-        return top5[["Image", "Sharpness", "Exposure", "Contrast", "Uniformity", "Defect", "Total Quality", "Timestamp"]]
+        return top5[["Image", "Sharpness", "Exposure", "Contrast", "Uniformity", "Total Quality", "Timestamp"]]
 
     except Exception as e:
         return pd.DataFrame({"錯誤": [f"⚠️ 讀取失敗：{e}"]})
@@ -360,7 +360,7 @@ with gr.Blocks(title="成像品質評分系統") as demo:
             history_btn = gr.Button("📊 顯示品質最佳前五名")
             df_output = gr.Dataframe(
                 interactive=True,
-                headers=["Image", "Sharpness", "Exposure", "Contrast", "Uniformity", "Defect", "Total Quality", "Timestamp"],
+                headers=["Image", "Sharpness", "Exposure", "Contrast", "Uniformity", "Total Quality", "Timestamp"],
             )
             selected_image = gr.Image(label="🔍 預覽圖片")  # 預覽圖
             preview_buttons = [gr.Button(f"查看第{i+1}名圖片") for i in range(5)]  # 🔘 五個按鈕
