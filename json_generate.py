@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 import pandas as pd
 from sklearn.linear_model import LinearRegression
+import os
 
 # ---------------- 基本設定 ----------------
 MODELS = ["全色域環形100", "全色域條形30100", "全色域同軸60",
@@ -13,6 +14,19 @@ KEY_MAP = dict(zip(MODELS, ["p1", "p2", "p3", "p4", "p5"]))
 
 BRIGHTNESS_BASE = ["1024", "512"]
 COLOR_BASE      = ["1000", "500", "0"]
+
+
+# ---------- 先建立根資料夾與子資料夾結構 ----------
+JSON_ROOT = Path("json_generator")
+SUBFOLDERS = {
+    "single": JSON_ROOT / "single",
+    "combo": JSON_ROOT / "combo",
+    "division": JSON_ROOT / "division",
+    "sampling": JSON_ROOT / "sampling",
+    "led2lab": JSON_ROOT / "led2lab"
+}
+for sub in SUBFOLDERS.values():
+    os.makedirs(sub, exist_ok=True)
 
 ###################################
 # 1.產生單色光 JSON
@@ -68,11 +82,11 @@ def create_single_color_json(sk_file, model, channel):
         entry_copy['scenes'] = scenes
         new_data[key] = entry_copy
 
-    # 6) 輸出 JSON
-    out_fname = f"single_{key}_{channel}.json"
+    # 6) 輸出 JSON 到 json_generator/single 底下
+    out_fname = SUBFOLDERS["single"] / f"single.json"
     with open(out_fname, 'w', encoding='utf-8') as f:
         json.dump(new_data, f, ensure_ascii=False, indent=4)
-    return out_fname
+    return str(out_fname.resolve())
 
 ###################################
 # 2.產生 JSON 排列組合
@@ -115,10 +129,10 @@ def create_json(sk_path, b_cnt, c_cnt, *txts):
         else:
             node["scenes"] = scenes
 
-    out = "lightPara.json"
+    out = SUBFOLDERS["combo"] / "combo.json"
     json.dump(data, open(out, "w", encoding="utf-8"),
               ensure_ascii=False, indent=4)
-    return out
+    return str(out.resolve())
 
 ###################################
 # 3.WRGB 等分組合 JSON 排列組合
@@ -189,10 +203,10 @@ def create_division_color_json(sk_file, model, w_max, r_max, g_max, b_max, divis
         new_data[key] = entry_copy
 
     # 輸出 JSON
-    out_fname = f"divisions_{key}.json"
+    out_fname = SUBFOLDERS["division"] / f"divisions.json"
     with open(out_fname, 'w', encoding='utf-8') as f:
         json.dump(new_data, f, ensure_ascii=False, indent=4)
-    return out_fname
+    return str(out_fname.resolve())
 ###################################
 # 4.WRGB  抽樣打光 JSON 排列組合
 ###################################
@@ -410,11 +424,11 @@ def generate_sampling_json(
     new_data[key] = new_node
 
     # ---------- 4. 輸出 ----------------------------------
-    out_json = Path(tempfile.mkdtemp()) / f"wrgb_sampling_{key}.json"
-    with open(out_json, "w", encoding="utf-8") as f:
+    out_fname = SUBFOLDERS["sampling"] / f"wrgb_sampling.json"
+    with open(out_fname, "w", encoding="utf-8") as f:
         json.dump(new_data, f, ensure_ascii=False, indent=4)
 
-    return str(out_json), func_expr
+    return str(out_fname), func_expr
 
 
 
@@ -502,7 +516,7 @@ def create_leb2lab_json(sk_file,
         new_data[key] = attach_scenes(node)
 
     # ---------- 5. 輸出 JSON 檔案 ----------
-    out_fname = f"lab_reps_{key}.json"
+    out_fname = SUBFOLDERS["led2lab"] / f"lab_reps.json"
     with open(out_fname, "w", encoding="utf-8") as f:
         json.dump(new_data, f, ensure_ascii=False, indent=4)
 
@@ -515,7 +529,21 @@ def create_leb2lab_json(sk_file,
 ###################################
 with gr.Blocks(title="自動打光JSON生成器") as demo:
     with gr.Tabs():
-        # 第一個頁籤：LightPara JSON 生成器
+
+        # 新增第一頁：單色光生成
+        with gr.TabItem("單色光生成"):
+            sk2 = gr.File(label="📄 上傳骨架 JSON")
+            model_sel = gr.Dropdown(MODELS, label="選擇模型")
+            channel_sel = gr.Dropdown(['W','R','G','B'], label="選擇光源 (W/R/G/B)")
+            gen_btn = gr.Button("生成單色光 JSON")
+            out_file = gr.File(label="⬇️ 下載 JSON")
+            gen_btn.click(
+                fn=create_single_color_json,
+                inputs=[sk2, model_sel, channel_sel],
+                outputs=out_file
+            )
+
+        # 新增第二頁：LightPara JSON 生成器
         with gr.TabItem("自動打光矩陣生成"):  
             sk_file = gr.File(label="📄 上傳骨架 JSON")
             b_cnt = gr.Dropdown([1,2,3], value=2, label="亮度數量")
@@ -547,22 +575,10 @@ with gr.Blocks(title="自動打光JSON生成器") as demo:
                 tab.select(lambda bn, cn, i=i: sync_single(bn, cn, i), [b_cnt, c_cnt], [b_boxes[i], c_boxes[i]])
             demo.load(sync_all, [b_cnt, c_cnt], b_boxes + c_boxes)
             gen_btn = gr.Button("生成 JSON")
-            out_file = gr.File(label="⬇️ 下載 lightPara.json")
+            out_file = gr.File(label="⬇️ 下載 combo.json")
             interleaved = [v for pair in zip(b_boxes, c_boxes) for v in pair]
             gen_btn.click(create_json, [sk_file, b_cnt, c_cnt] + interleaved, out_file)
 
-        # 新增第二頁：單色光生成
-        with gr.TabItem("單色光生成"):
-            sk2 = gr.File(label="📄 上傳骨架 JSON")
-            model_sel = gr.Dropdown(MODELS, label="選擇模型")
-            channel_sel = gr.Dropdown(['W','R','G','B'], label="選擇光源 (W/R/G/B)")
-            gen_btn = gr.Button("生成單色光 JSON")
-            out_file = gr.File(label="⬇️ 下載 JSON")
-            gen_btn.click(
-                fn=create_single_color_json,
-                inputs=[sk2, model_sel, channel_sel],
-                outputs=out_file
-            )
 
         # 新增第三頁：等分組合生成
         with gr.TabItem("WRGB 等分組合生成"):
@@ -574,12 +590,14 @@ with gr.Blocks(title="自動打光JSON生成器") as demo:
             b_max = gr.Number(label="B(Max)")
             divisions = gr.Number(label="等分數量", value=1, precision=0)
             gen_div_btn = gr.Button("生成等分組合JSON")
-            out_div_file = gr.File(label="⬇️ 下載 JSON")
+            out_div_file = gr.File(label="⬇️ 下載 divisions.json")
             gen_div_btn.click(
                 fn=create_division_color_json,
                 inputs=[sk_div, model_div, w_max, r_max, g_max, b_max, divisions],
                 outputs=out_div_file
             )
+
+
         # 新增第四頁：WRGB 抽樣打光矩陣生成
         with gr.TabItem("WRGB 抽樣打光矩陣"):
             # 1) 骨架 JSON
@@ -613,7 +631,7 @@ with gr.Blocks(title="自動打光JSON生成器") as demo:
             func_box = gr.Textbox(label="合成亮度函式", lines=2)
 
             gen_btn.click(
-                fn=generate_sampling_json,          # 你在 wrgb_sampler.py 內實作的新函式
+                fn=generate_sampling_json,          
                 inputs=[
                     sk_in,model_div, w_csv, r_csv, g_csv, b_csv,
                     w_max, r_max, g_max, b_max,
