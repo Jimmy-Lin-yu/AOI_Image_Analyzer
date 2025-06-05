@@ -30,5 +30,7 @@ RUN pip3 install --upgrade pip && \
 # （可選）複製整個專案到容器
 # COPY . .
 
+COPY . /app
+
 # 進入 bash
 CMD ["bash"]
