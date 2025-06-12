@@ -68,7 +68,23 @@ class LabHueDisc:
                 'G10': int(G10),
                 'B10': int(B10)
             })
+
+        # —— 新增：圓心中間點 —— #
+        # a*=0, b*=0 就是純灰 (同 L* 的中間灰)
+        R10c, G10c, B10c = self._lab_to_led10bit(self.L, 0.0, 0.0)
+        reps.append({
+            'h': None,           # 中間點沒有色相
+            'L': float(self.L),
+            'a': 0.0,
+            'b': 0.0,
+            'R10': int(R10c),
+            'G10': int(G10c),
+            'B10': int(B10c)
+        })
+
         return reps
+    
+    
 
     def _make_hue_disc(self):
         g = np.arange(-self.R, self.R + self.ds, self.ds)
@@ -137,10 +153,14 @@ class LabHueDisc:
                 zorder=4
             )
             # 標籤文字拉外
+            if r['h'] is None:
+                label = "C"
+            else:
+                label = f"{int(r['h']):>3d}°"
             ax.text(
                 r['a'] * label_shift,
                 r['b'] * label_shift,
-                f"{int(r['h']):>3d}°",
+                f"{label}°",
                 color='black',
                 fontsize=5,
                 ha='center',
@@ -172,79 +192,67 @@ class LabHueDisc:
         plt.close(fig)
 
     def save_representatives_as_image(self,
-                                      reps: list[dict] | None = None,
-                                      out_path: str | None = None):
+                                    reps: list[dict] | None = None,
+                                    out_path: str | None = None):
         """
         將 reps 列表（由 LabHueDisc.representatives() 回傳的）：
-        Hue, L*, a*, b*, R10, G10, B10，格式化後繪到一張 JPG 上。
+        Hue, L*, a*, b*, R10, G10, B10，繪成對齊表格並存為 JPG。
 
-        參數
-        ----
-        reps     : list[dict]    # 代表點列表，每個 dict 包含 'h','L','a','b','R10','G10','B10'
-        out_path : str | None    # 輸出檔名；若 None，則自動命名為：
-                                 #   LED2LAB/Hue_Rep_L{L}_C{C}_{N}div.jpg
+        reps     : list[dict]    # 代表點列表
+        out_path : str | None    # 輸出檔名；若 None，則預設為 LED2LAB/Hue_Rep_L{L}_C{C}_{N}div.jpg
         """
+        import pandas as pd
 
-        # 如果沒有傳 reps，就用自己計算好的 self._reps
+        # 確認 reps
         if reps is None:
             reps = self._reps
 
-        # 自動建立 LED2LAB 資料夾
+        # 自動建立資料夾
         os.makedirs(self.folder, exist_ok=True)
 
-        # 如果用戶沒提供 out_path，就用 L、C 及 N 來自動命名
+        # 自動命名
         if out_path is None:
             filename = f"Hue_Rep_L{self.L:.1f}_C{self.C:.1f}_{self.N}div.jpg"
             out_path = os.path.join(self.folder, filename)
 
-        # 準備字串線
-        header = "Hue   L*     a*      b*     R10   G10   B10"
-        separator = "-" * len(header)
-        lines = [header, separator]
-
+        # 建 DataFrame
+        rows = []
         for r in reps:
-            line = (
-                f"{int(r['h']):>3d}°  "
-                f"{r['L']:>5.1f}  "
-                f"{r['a']:>7.2f}  "
-                f"{r['b']:>7.2f}    "
-                f"{r['R10']:>4d}   "
-                f"{r['G10']:>4d}   "
-                f"{r['B10']:>4d}"
-            )
-            lines.append(line)
+            hue = 'C' if r['h'] is None else f"{int(r['h'])}°"
+            rows.append({
+                'Hue': hue,
+                'L*': f"{r['L']:.1f}",
+                'a*': f"{r['a']:.2f}",
+                'b*': f"{r['b']:.2f}",
+                'R10': str(r['R10']),
+                'G10': str(r['G10']),
+                'B10': str(r['B10']),
+            })
+        df = pd.DataFrame(rows, columns=['Hue','L*','a*','b*','R10','G10','B10'])
 
-        # 計算畫布高度：假設每行 0.4 英吋，高度 = 0.4 * (行數)，至少 2 吋
-        n_lines = len(lines)
-        fig_height = max(2, 0.4 * n_lines)
-        fig_width = 6  # 固定 6 吋寬度
-
-        fig, ax = plt.subplots(
-            figsize=(fig_width, fig_height),
-            facecolor='black'
-        )
+        # 計算圖高：至少 2 吋，每行 0.6 吋
+        fig_height = max(2, 0.6 * len(df))
+        fig, ax = plt.subplots(figsize=(8, fig_height), facecolor='black')
         ax.set_facecolor('black')
-        ax.axis("off")
+        ax.axis('off')
 
-        # 文字起始座標 & 行距 (以圖形比例衡量)
-        x, y = 0.01, 0.98  # 左上角
-        line_spacing = 1.0 / n_lines * 0.9  # 0.9 範圍，留些邊界
-
-        for idx, text in enumerate(lines):
-            yi = y - idx * line_spacing
-            ax.text(
-                x, yi, text,
-                fontfamily="monospace",
-                color="white",
-                fontsize=12,
-                va="top", ha="left",
-                transform=ax.transAxes
-            )
+        # 畫 table
+        table = ax.table(
+            cellText=df.values,
+            colLabels=df.columns,
+            cellLoc='center',
+            colLoc='center',
+            loc='center'
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(12)
+        table.scale(1, 1.5)
 
         plt.tight_layout()
         fig.savefig(out_path, dpi=200, facecolor=fig.get_facecolor())
         plt.close(fig)
-        print(f"✔ 表格已繪製到圖像：{out_path}")
+        print(f"✔ 對齊後的代表色表格已儲存：{out_path}")
+
 
 
 # =========================================================
