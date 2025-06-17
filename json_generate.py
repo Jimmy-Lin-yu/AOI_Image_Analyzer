@@ -438,91 +438,160 @@ def generate_sampling_json(
 
 from LED2LAB import LabHueDisc
 
-def create_leb2lab_json(sk_file,
-                        model: str,
-                        L_fixed: float = 50.0,
-                        C_repr: float = 50.0,
-                        n_divisions: int = 8,
-                        ):
-    """
-    讀取骨架 JSON，指定 model，使用 LabHueDisc 取得 N 個代表色 (0°, 360/N, 2×360/N … )。
-    同時：
-      1) 生成 JSON (lab_reps_{key}.json)
-      2) 生成「代表色表格」JPEG
-      3) 生成「CIELAB Hue Disc」JPEG
+# def create_leb2lab_json(sk_file,
+#                         model: str,
+#                         L_fixed: float = 50.0,
+#                         C_repr: float = 50.0,
+#                         n_divisions: int = 8,
+#                         ):
+#     """
+#     讀取骨架 JSON，指定 model，使用 LabHueDisc 取得 N 個代表色 (0°, 360/N, 2×360/N … )。
+#     同時：
+#       1) 生成 JSON (lab_reps_{key}.json)
+#       2) 生成「代表色表格」JPEG
+#       3) 生成「CIELAB Hue Disc」JPEG
 
-    回傳三個檔案路徑：(json_path, rep_img_path, disc_img_path)
+#     回傳三個檔案路徑：(json_path, rep_img_path, disc_img_path)
+#     """
+
+#     # ---------- 1. 讀取骨架 JSON ----------
+#     path = Path(sk_file) if not isinstance(sk_file, Path) else sk_file
+#     with open(path, "r", encoding="utf-8") as f:
+#         data = json.load(f)
+
+#     # ---------- 2. 取得對應節點 ----------
+#     key = KEY_MAP[model]
+#     node = data.get(key)
+#     if node is None:
+#         raise KeyError(f"模型 {model} 的節點 key='{key}' 不存在於骨架 JSON。")
+
+#     # ---------- 3. 用 LabHueDisc 算 N 個代表色 ----------
+#     disc = LabHueDisc(L_fixed=L_fixed,
+#                       C_repr=C_repr,
+#                       n_divisions=n_divisions)
+#     reps = disc.representatives()  # list of dict（含 R10,G10,B10）
+
+#     # （一）儲存「代表色表格」到 JPEG
+#     #   LabHueDisc.save_representatives_as_image() 預設會儲存到 LED2LAB 資料夾
+#     #   並且檔名會是 Hug_Rep_L{L}_C{C}_{N}div.jpg
+#     disc._generate_base_image()
+#     # 我們可以手動組出那個路徑
+#     rep_filename = f"Hue_Rep_L{disc.L:.1f}_C{disc.C:.1f}_{disc.N}div.jpg"
+#     rep_img_path = str(Path(disc.folder) / rep_filename)
+
+#     # （二）儲存「CIELAB Hue Disc」到 JPEG
+#     #   LabHueDisc.plot() 如果不給 save_as，就會採預設格式：
+#     #   Hue_Disc_L{L}_C{C}_{N}div.jpg 放到 LED2LAB 資料夾
+#     disc.plot()
+#     disc_filename = f"Hue_Disc_L{disc.L}_C{disc.C}_{disc.N}div.jpg"
+#     disc_img_path = str(Path(disc.folder) / disc_filename)
+
+#     # ---------- 4. 把新的 scenes 塞回骨架 JSON ----------
+#     scenes = []
+#     for r in reps:
+#         scenes.append({
+#             "brightness": 1024,  # Python int
+#             "colors": [
+#                 0,                    # W 通道固定為 0
+#                 int(r['R10']),
+#                 int(r['G10']),
+#                 int(r['B10'])
+#             ],
+#             "currentZone": 0,
+#             "zoneMode": 0
+#         })
+
+#     new_data = {}
+#     if 'device' in data:
+#         new_data['device'] = data['device']
+
+#     def attach_scenes(entry):
+#         entry_cp = {k: v for k, v in entry.items() if k != 'scenes'}
+#         entry_cp['scenes'] = scenes
+#         return entry_cp
+
+#     if isinstance(node, list):
+#         new_data[key] = [attach_scenes(e) for e in node]
+#     else:
+#         new_data[key] = attach_scenes(node)
+
+#     # ---------- 5. 輸出 JSON 檔案 ----------
+#     out_fname = SUBFOLDERS["led2lab"] / f"lab_reps.json"
+#     with open(out_fname, "w", encoding="utf-8") as f:
+#         json.dump(new_data, f, ensure_ascii=False, indent=4)
+
+#     print(f"✔ 已生成 {n_divisions} 個等角代表色，輸出：{out_fname}")
+#     return str(Path(out_fname).resolve()), [rep_img_path, disc_img_path]
+
+from LED2HSV import HSVHueDisc
+
+def create_hsv2rgb_json(
+    sk_file,
+    model: str,
+    n_divisions: int = 8,
+    V_fixed: float = 100,
+    S_repr: float = 50,
+) -> tuple[str, list[str]]:
+    """
+    讀取骨架 JSON，依目前 N、V*、S* 產生代表色：
+      1) 輸出轉好的骨架 JSON
+      2) 取得兩張圖片
+         ├─ HSV 彩虹盤 + 代表點
+         └─ 10-bit LED 代表色表格
+    回傳 (json_path, [表格圖, 彩虹盤圖])
     """
 
-    # ---------- 1. 讀取骨架 JSON ----------
+    # ---------- 1. 讀骨架 ----------
     path = Path(sk_file) if not isinstance(sk_file, Path) else sk_file
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # ---------- 2. 取得對應節點 ----------
-    key = KEY_MAP[model]
+    # ---------- 2. 找對應節點 ----------
+    key  = KEY_MAP[model]
     node = data.get(key)
     if node is None:
-        raise KeyError(f"模型 {model} 的節點 key='{key}' 不存在於骨架 JSON。")
+        raise KeyError(f"模型 {model} 的 key='{key}' 不在骨架 JSON 中")
 
-    # ---------- 3. 用 LabHueDisc 算 N 個代表色 ----------
-    disc = LabHueDisc(L_fixed=L_fixed,
-                      C_repr=C_repr,
-                      n_divisions=n_divisions)
-    reps = disc.representatives()  # list of dict（含 R10,G10,B10）
+    # ---------- 3. 產生代表色 + 兩張圖片 ----------
+    disc = HSVHueDisc(
+        n_divisions = n_divisions,
+        V_fixed     = V_fixed,
+        S_repr      = S_repr,
+        folder      = "LED2HSV"
+    )
+    reps               = disc.representatives()         # list[dict]
+    disc_path, rep_path = disc.plot()                   # ← 兩張圖
 
-    # （一）儲存「代表色表格」到 JPEG
-    #   LabHueDisc.save_representatives_as_image() 預設會儲存到 LED2LAB 資料夾
-    #   並且檔名會是 Hug_Rep_L{L}_C{C}_{N}div.jpg
-    disc.save_representatives_as_image(reps)
-    # 我們可以手動組出那個路徑
-    rep_filename = f"Hue_Rep_L{disc.L:.1f}_C{disc.C:.1f}_{disc.N}div.jpg"
-    rep_img_path = str(Path(disc.folder) / rep_filename)
+    # ---------- 4. 轉成 10-bit scene ----------
+    scenes = [{
+        "brightness": 1024,
+        "colors": [0, r["R10"], r["G10"], r["B10"]],
+        "currentZone": 0,
+        "zoneMode": 0
+    } for r in reps]
 
-    # （二）儲存「CIELAB Hue Disc」到 JPEG
-    #   LabHueDisc.plot() 如果不給 save_as，就會採預設格式：
-    #   Hue_Disc_L{L}_C{C}_{N}div.jpg 放到 LED2LAB 資料夾
-    disc.plot()
-    disc_filename = f"Hue_Disc_L{disc.L}_C{disc.C}_{disc.N}div.jpg"
-    disc_img_path = str(Path(disc.folder) / disc_filename)
-
-    # ---------- 4. 把新的 scenes 塞回骨架 JSON ----------
-    scenes = []
-    for r in reps:
-        scenes.append({
-            "brightness": 1024,  # Python int
-            "colors": [
-                0,                    # W 通道固定為 0
-                int(r['R10']),
-                int(r['G10']),
-                int(r['B10'])
-            ],
-            "currentZone": 0,
-            "zoneMode": 0
-        })
-
+    # ---------- 5. 塞回骨架 JSON ----------
     new_data = {}
-    if 'device' in data:
-        new_data['device'] = data['device']
+    if "device" in data:
+        new_data["device"] = data["device"]
 
-    def attach_scenes(entry):
-        entry_cp = {k: v for k, v in entry.items() if k != 'scenes'}
-        entry_cp['scenes'] = scenes
-        return entry_cp
+    def attach(entry):
+        cp = {k: v for k, v in entry.items() if k != "scenes"}
+        cp["scenes"] = scenes
+        return cp
 
-    if isinstance(node, list):
-        new_data[key] = [attach_scenes(e) for e in node]
-    else:
-        new_data[key] = attach_scenes(node)
+    new_data[key] = [attach(e) for e in node] if isinstance(node, list) else attach(node)
 
-    # ---------- 5. 輸出 JSON 檔案 ----------
-    out_fname = SUBFOLDERS["led2lab"] / f"lab_reps.json"
-    with open(out_fname, "w", encoding="utf-8") as f:
+    # ---------- 6. 寫出新的 JSON ----------
+    out_json = SUBFOLDERS["led2lab"] / f"hsv_reps_{key}.json"
+    os.makedirs(out_json.parent, exist_ok=True)
+    with open(out_json, "w", encoding="utf-8") as f:
         json.dump(new_data, f, ensure_ascii=False, indent=4)
 
-    print(f"✔ 已生成 {n_divisions} 個等角代表色，輸出：{out_fname}")
-    return str(Path(out_fname).resolve()), [rep_img_path, disc_img_path]
+    print(f"✔ 已輸出 HSV→LED JSON：{out_json}")
 
+    # ---------- 7. 回傳 ----------
+    return str(out_json.resolve()), [rep_path, disc_path]
 
 ###################################
 # 建立 Gradio 介面
@@ -642,22 +711,44 @@ with gr.Blocks(title="自動打光JSON生成器") as demo:
             )
         
         # 新增第五頁：LED2LAB 自動打光 JSON 生成器
-        with gr.TabItem("LED2LAB 自動打光"):
-            sk_lab = gr.File(label="📄 上傳骨架 JSON")
-            model_lab = gr.Dropdown(MODELS, label="選擇模型")
-            L_fixed = gr.Number(label="L* 固定值", value=50.0, precision=1)
-            C_repr = gr.Number(label="代表色彩度 C*", value=100.0, precision=1)
-            divisions_lab = gr.Number(label="等分數量", value=8, precision=0)
+        # with gr.TabItem("LED2LAB 自動打光"):
+        #     sk_lab = gr.File(label="📄 上傳骨架 JSON")
+        #     model_lab = gr.Dropdown(MODELS, label="選擇模型")
+        #     L_fixed = gr.Number(label="L* 固定值", value=50.0, precision=1)
+        #     C_repr = gr.Number(label="代表色彩度 C*", value=100.0, precision=1)
+        #     divisions_lab = gr.Number(label="等分數量", value=8, precision=0)
 
-            gen_lab_btn = gr.Button("生成 LED2LAB JSON")
-            gallery = gr.Gallery(label="10-bit 代表色表格 & CIELAB Hue Disc", columns=2, height="auto")
-            out_lab_file = gr.File(label="⬇️ 下載 JSON")
+        #     gen_lab_btn = gr.Button("生成 LED2LAB JSON")
+        #     gallery = gr.Gallery(label="10-bit 代表色表格 & CIELAB Hue Disc", columns=2, height="auto")
+        #     out_lab_file = gr.File(label="⬇️ 下載 JSON")
 
 
-            gen_lab_btn.click(
-                fn=create_leb2lab_json,
-                inputs=[sk_lab, model_lab, L_fixed, C_repr, divisions_lab],
-                outputs=[out_lab_file, gallery]
+        #     gen_lab_btn.click(
+        #         fn=create_leb2lab_json,
+        #         inputs=[sk_lab, model_lab, L_fixed, C_repr, divisions_lab],
+        #         outputs=[out_lab_file, gallery]
+        #     )
+
+        # 新增第五頁：HSV2RGB 自動打光 JSON 生成器
+        with gr.TabItem("HSV2RGB 自動打光"):
+            sk_hsv        = gr.File(label="📄 上傳骨架 JSON")
+            model_hsv     = gr.Dropdown(MODELS, label="選擇模型")
+            divisions_hsv = gr.Number(label="等分數量 (N)", value=8, precision=0)
+            V_fixed = gr.Number(label="亮度  V (上限100)*", value=50.0, precision=1)
+            S_repr = gr.Number(label="飽和度 S(上限100)*", value=100.0, precision=1)
+         
+
+            gen_hsv_btn   = gr.Button("生成 HSV2RGB JSON")
+            gallery_hsv   = gr.Gallery(
+                label="10-bit 代表色表格 & HSV 彩虹盤",
+                columns=2, height="auto"
+            )
+            out_hsv_file  = gr.File(label="⬇️ 下載 JSON")
+
+            gen_hsv_btn.click(
+                fn=create_hsv2rgb_json,                                       # 改成你的 HSV 版函式
+                inputs=[sk_hsv, model_hsv, divisions_hsv, V_fixed, S_repr],
+                outputs=[out_hsv_file, gallery_hsv]
             )
 
 if __name__ == "__main__":
