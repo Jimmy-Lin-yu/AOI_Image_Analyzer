@@ -4,119 +4,78 @@ import pandas as pd
 import os
 import datetime
 import shutil
-import zipfile
-import tempfile
-
+from pathlib import Path
 from image_evaluation import ImageQualityAnalyzer
-from word_change import FilenameTranslator
 from yolo_model import YOLOImageProcessor
+from image_zip_manage import ImageZipManager
 from datetime import datetime
 # ------------------ 分析圖片 ------------------
 import os
 import cv2
 import pandas as pd
 import numpy as np
-import zipfile
-import tempfile
 from datetime import datetime
 
-
-# ------------------ ZIP 解壓支援中文檔名 ------------------
-def extract_zip_preserve_chinese(zip_file_path, dest_dir, from_enc='cp437', to_enc='gbk'):
-    """
-    Extracts a ZIP file while re-decoding filenames from `from_enc` to `to_enc`.
-    Adjust encodings if your ZIP uses a different scheme.
-    """
-    with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
-        for zf_info in zip_ref.infolist():
-            try:
-                # Re-decode the filename: first get the bytes as interpreted in cp437,
-                # then decode them using the expected Chinese encoding (gbk).
-                decoded_filename = zf_info.filename.encode(from_enc).decode(to_enc)
-            except Exception as e:
-                # In case of failure, fall back to original filename
-                decoded_filename = zf_info.filename
-            # Update the in-memory filename before extraction
-            zf_info.filename = decoded_filename
-            zip_ref.extract(zf_info, dest_dir)
 
 # ------------------ (1) 上傳檔案儲存 ------------------
 def store_uploaded_files(uploaded, upload_folder):
     """
-    根據上傳內容（單張圖片、ZIP 壓縮包或單個檔案），將圖片存入 upload_folder，
-    並回傳處理結果訊息。
+    根據上傳內容（單張圖片、ZIP 或單個檔案），
+    將影像存到 upload_folder，並回傳處理結果訊息。
+    ZIP 分支先呼叫 ImageZipManager.decompress_only() 只做解壓，
+    再在這裡對每個檔案呼叫 mgr.translate() 並一次處理翻譯檔名。
     """
-    translator = FilenameTranslator()
+    mgr = ImageZipManager()
     result = ""
     os.makedirs(upload_folder, exist_ok=True)
-    
-    # 處理單張圖像（來自 gr.Image，型別 np.ndarray）
+
+    # 1a. 處理單張 np.ndarray
     if isinstance(uploaded, np.ndarray):
         image_name = f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        image_bgr = cv2.cvtColor(uploaded, cv2.COLOR_RGB2BGR)
-        save_path = os.path.join(upload_folder, image_name)
+        image_bgr  = cv2.cvtColor(uploaded, cv2.COLOR_RGB2BGR)
+        save_path  = os.path.join(upload_folder, image_name)
         cv2.imwrite(save_path, image_bgr)
         result += f"已儲存單張圖片：{image_name}\n"
-    
-    # 處理 ZIP 壓縮包
+
+    # 1b. 處理 ZIP
     elif hasattr(uploaded, "name") and uploaded.name.lower().endswith(".zip"):
-        result += "📦 解壓 ZIP 檔案中...\n"
-        with tempfile.TemporaryDirectory() as temp_dir:
-            extract_zip_preserve_chinese(uploaded.name, temp_dir)
-            for root, _, files in os.walk(temp_dir):
-                for fname in files:
-                    if not fname.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
-                        continue
+        result += "📦 ZIP 解壓並翻譯中...\n"
+        try:
+            # 先只解壓，不翻譯
+            extracted = mgr.decompress_images(uploaded.name, upload_folder)
+            for src in extracted:
+                base = os.path.basename(src)
+                # 先略過 bad_keyword
+                if mgr.bad_kw in base:
+                    os.remove(src)
+                    result += f"{base} → 含關鍵字已刪除\n"
+                    continue
+                # translate & rename
+                new_base = mgr.translate(base)
+                dst = os.path.join(upload_folder, new_base)
+                os.rename(src, dst)
+                result += f"翻譯檔名：{base} → {new_base}\n"
+        except Exception as e:
+            result += f"❌ ZIP 處理失敗：{e}\n"
 
-                    # 刪除包含 "光度立体" 的檔案
-                    if "光度立体" in fname:
-                        try:
-                            os.remove(os.path.join(root, fname))
-                            result += f"{fname} → 包含 '光度立体' 已刪除\n"
-                        except Exception as e:
-                            result += f"{fname} → 刪除失敗: {e}\n"
-                        continue
-
-                    new_fname = translator.translate(fname)
-                    src_path = os.path.join(root, fname)
-                    dst_path = os.path.join(upload_folder, new_fname)
-
-                    # 避免複製到自己
-                    try:
-                        if os.path.abspath(src_path) != os.path.abspath(dst_path):
-                            shutil.copy(src_path, dst_path)
-                            result += f"已複製圖片：{new_fname}\n"
-                        else:
-                            result += f"{new_fname} → 路徑相同，跳過複製\n"
-                    except SameFileError:
-                        result += f"{new_fname} → 同一檔案，已跳過\n"
-
-    # 處理單個圖片檔案 (gr.File)
-    elif hasattr(uploaded, "name") and uploaded.name.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
-        src_name = uploaded.name
-        # 刪除包含 "光度立体" 的檔案
-        if "光度立体" in os.path.basename(src_name):
-            try:
-                os.remove(src_name)
-                result += f"{os.path.basename(src_name)} → 包含 '光度立体' 已刪除\n"
-            except Exception as e:
-                result += f"{os.path.basename(src_name)} → 刪除失敗: {e}\n"
+    # 1c. 處理單檔影像
+    elif hasattr(uploaded, "name") and \
+         uploaded.name.lower().endswith((".png",".jpg",".jpeg",".bmp",".tiff")):
+        base = os.path.basename(uploaded.name)
+        if mgr.bad_kw in base:
+            result += f"{base} → 含關鍵字已略過\n"
         else:
-            new_fname = translator.translate(os.path.basename(src_name))
-            dst_path = os.path.join(upload_folder, new_fname)
-            # 避免複製到自己
+            new_base = mgr.translate(base)
+            dst = os.path.join(upload_folder, new_base)
             try:
-                if os.path.abspath(src_name) != os.path.abspath(dst_path):
-                    shutil.copy(src_name, dst_path)
-                    result += f"已複製單張圖片：{new_fname}\n"
-                else:
-                    result += f"{new_fname} → 路徑相同，跳過複製\n"
-            except SameFileError:
-                result += f"{new_fname} → 同一檔案，已跳過\n"
+                shutil.copy(uploaded.name, dst)
+                result += f"已儲存：{new_base}\n"
+            except Exception as e:
+                result += f"❌ 複製失敗：{e}\n"
 
     else:
-        return "❌ 請上傳圖片、ZIP 或有效的圖片格式"
-    
+        return "❌ 請上傳圖片、ZIP 或有效的影像檔"
+
     return result
 
 
@@ -129,7 +88,7 @@ def process_uploaded_images_with_yolo(upload_folder, crop_folder, yolo_model_pat
     """
     os.makedirs(crop_folder, exist_ok=True)
     
-    yolo_processor = YOLOImageProcessor(yolo_model_path, upload_folder, crop_folder)
+    yolo_processor = YOLOImageProcessor(upload_folder, crop_folder)
     yolo_processor.process_images()
     result = f"✅ YOLO 處理完成，已將裁切後圖片存入 {crop_folder}\n"
     return result
@@ -170,7 +129,7 @@ def quality_analysis_on_cropped(crop_folder, csv_path):
                 "uniformity": analyzer.calculate_light_uniformity(image),
                 # "defect": analyzer.calculate_defect_score(image)
             }
-            scores, total = ImageQualityAnalyzer.evaluate_quality(metrics)
+            scores, total = analyzer.evaluate_quality(metrics)
             output_text = "影像品質分析結果：\n"
             for (k, v), score in zip(metrics.items(), scores):
                 output_text += f"  {k.capitalize()}: {v:.2f} → Score {score}\n"
@@ -195,31 +154,6 @@ def quality_analysis_on_cropped(crop_folder, csv_path):
     df_all.to_csv(csv_path, index=False)
     result += f"✅ 品質分析完成，共 {len(records)} 筆資料記錄到 CSV\n"
     return result
-
-# ------------------ 主流程：分析上傳資料 ------------------
-def analyze_input(uploaded):
-    """
-    流程：
-      1. 將上傳的圖片（或 ZIP）存入指定上傳資料夾 (.gradio/flagged/uploaded_image)
-      2. 呼叫 YOLO 模型處理上傳資料夾中的所有圖片，
-         將裁切後的圖片以「原檔名_crop.jpg」存到 .gradio/flagged/crop_image
-      3. 針對裁切後圖片進行影像品質分析，並將結果記錄到 CSV（dataset1.csv）
-    """
-    base_flag_dir = os.path.join(".gradio", "flagged")
-    upload_folder = os.path.join(base_flag_dir, "uploaded_image")
-    crop_folder   = os.path.join(base_flag_dir, "crop_image")
-    csv_path      = os.path.join(base_flag_dir, "dataset1.csv")
-    
-    # Step 1: 儲存上傳檔案
-    msg_store = store_uploaded_files(uploaded, upload_folder)
-    
-    # Step 2: 使用 YOLO 處理上傳的圖片，注意 YOLO_MODEL_PATH 為全域變數
-    msg_yolo = process_uploaded_images_with_yolo(upload_folder, crop_folder, YOLO_MODEL_PATH)
-    
-    # Step 3: 品質分析並更新 CSV
-    msg_quality = quality_analysis_on_cropped(crop_folder, csv_path)
-    
-    return msg_store + msg_yolo + msg_quality
 
 
 # ------------------ 顯示前五名 ------------------
@@ -342,6 +276,61 @@ def clear_images_csv():
     except Exception as e:
         return f"❌ 清除失敗：{e}"
 
+# ------------------ 每個按鈕綁定一個前五名圖片名稱 ------------------
+def get_top_image(index):
+    try:
+        csv_path = os.path.join(".gradio", "flagged", "dataset1.csv")
+        df = pd.read_csv(csv_path)
+        df["Image"] = df["uploaded_image"].apply(lambda x: os.path.basename(str(x)) if pd.notnull(x) else "")
+        df["Total Quality"] = df["output"].str.extract(r"Total Quality: ([0-9.]+)%").astype(float)
+        top5 = df.sort_values(by="Total Quality", ascending=False).head(5)
+        return top5.iloc[index]["Image"] if index < len(top5) else None
+    except:
+        return None
+
+
+
+
+# ------------------ 主流程：分析上傳資料 ------------------
+
+#頁面1:成像品質評分
+def analyze_input(uploaded):
+    """
+    Gradio〈成像品質評分〉頁面的主流程：
+      1. 儲存上傳檔 (ZIP / 單圖) 至 .gradio/flagged/uploaded_image
+      2. 以 YOLO 產生裁切圖 → .gradio/flagged/crop_image
+      3. 對裁切圖做品質評分並寫入 dataset1.csv
+    """
+    base_dir        = Path(".gradio/flagged")
+    upload_dir      = base_dir / "uploaded_image"
+    crop_dir        = base_dir / "crop_image"
+    csv_path        = base_dir / "dataset1.csv"
+    messages: list[str] = []                      # 收集各步驟回傳文字
+
+    def _append(text):                            # 小工具：避免重複寫 "+="
+        if text:
+            messages.append(text.strip())
+
+    # ── STEP-1 儲存檔案 ──────────────────────────
+    try:
+        _append(store_uploaded_files(uploaded, upload_dir))
+    except Exception as e:
+        _append(f"❌ 儲存檔案失敗：{e}")
+
+    # ── STEP-2 YOLO 裁切 ────────────────────────
+    try:
+        _append(process_uploaded_images_with_yolo(upload_dir, crop_dir, YOLO_MODEL_PATH))
+    except Exception as e:
+        _append(f"❌ YOLO 處理失敗：{e}")
+
+    # ── STEP-3 品質評分 ─────────────────────────
+    try:
+        _append(quality_analysis_on_cropped(crop_dir, csv_path))
+    except Exception as e:
+        _append(f"❌ 品質評分失敗：{e}")
+
+    # 最終回傳
+    return "\n".join(messages) if messages else "⚠️ 無任何結果"
 
 
 # ------------------ Gradio UI ------------------
@@ -350,48 +339,38 @@ with gr.Blocks(title="成像品質評分系統") as demo:
     demo.allow_flagging = "manual"
 
     gr.Markdown("## 📸 Image Quality Analyzer")
+    with gr.TabItem("成像品質評分"):
+        with gr.Row():
+            with gr.Column():
+                image_input = gr.File(file_types=["image", ".zip"], label="上傳圖片或 ZIP 壓縮資料夾")
+                submit_btn = gr.Button("分析圖片")
+                output_text = gr.Textbox(label="分析結果", lines=8)
+            with gr.Column():
+                history_btn = gr.Button("📊 顯示品質最佳前五名")
+                df_output = gr.Dataframe(
+                    interactive=True,
+                    headers=["Image", "Sharpness", "Exposure", "Contrast", "Uniformity", "Total Quality", "Timestamp"],
+                )
+                selected_image = gr.Image(label="🔍 預覽圖片")  # 預覽圖
+                preview_buttons = [gr.Button(f"查看第{i+1}名圖片") for i in range(5)]  # 🔘 五個按鈕
+                backup_btn = gr.Button("📁 備份 CSV")
+                backup_result = gr.Textbox(label="備份結果")
+                clear_btn = gr.Button("🗑️ 清除 dataset1.csv")
+                clear_result = gr.Textbox(label="清除結果")
 
-    with gr.Row():
-        with gr.Column():
-            image_input = gr.File(file_types=["image", ".zip"], label="上傳圖片或 ZIP 壓縮資料夾")
-            submit_btn = gr.Button("分析圖片")
-            output_text = gr.Textbox(label="分析結果", lines=8)
-        with gr.Column():
-            history_btn = gr.Button("📊 顯示品質最佳前五名")
-            df_output = gr.Dataframe(
-                interactive=True,
-                headers=["Image", "Sharpness", "Exposure", "Contrast", "Uniformity", "Total Quality", "Timestamp"],
+        submit_btn.click(analyze_input, inputs=image_input, outputs=output_text)
+        history_btn.click(show_flagged_data, outputs=df_output)
+
+        for i, btn in enumerate(preview_buttons):
+            btn.click(
+                lambda idx=i: display_selected_image(get_top_image(idx)),
+                outputs=selected_image
             )
-            selected_image = gr.Image(label="🔍 預覽圖片")  # 預覽圖
-            preview_buttons = [gr.Button(f"查看第{i+1}名圖片") for i in range(5)]  # 🔘 五個按鈕
-            backup_btn = gr.Button("📁 備份 CSV")
-            backup_result = gr.Textbox(label="備份結果")
-            clear_btn = gr.Button("🗑️ 清除 dataset1.csv")
-            clear_result = gr.Textbox(label="清除結果")
 
-    submit_btn.click(analyze_input, inputs=image_input, outputs=output_text)
-    history_btn.click(show_flagged_data, outputs=df_output)
+        backup_btn.click(backup_csv, outputs=backup_result)
+        clear_btn.click(clear_images_csv, outputs=clear_result)
 
-    # 🔁 建立綁定，每個按鈕綁定一個前五名圖片名稱
-    def get_top_image(index):
-        try:
-            csv_path = os.path.join(".gradio", "flagged", "dataset1.csv")
-            df = pd.read_csv(csv_path)
-            df["Image"] = df["uploaded_image"].apply(lambda x: os.path.basename(str(x)) if pd.notnull(x) else "")
-            df["Total Quality"] = df["output"].str.extract(r"Total Quality: ([0-9.]+)%").astype(float)
-            top5 = df.sort_values(by="Total Quality", ascending=False).head(5)
-            return top5.iloc[index]["Image"] if index < len(top5) else None
-        except:
-            return None
-
-    for i, btn in enumerate(preview_buttons):
-        btn.click(
-            lambda idx=i: display_selected_image(get_top_image(idx)),
-            outputs=selected_image
-        )
-
-    backup_btn.click(backup_csv, outputs=backup_result)
-    clear_btn.click(clear_images_csv, outputs=clear_result)
+        
 if __name__ == "__main__":
     YOLO_MODEL_PATH = "/app/best.pt" 
     demo.launch(server_name="0.0.0.0", server_port=7860)

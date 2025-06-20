@@ -14,7 +14,6 @@ base_tmp = tempfile.gettempdir()
 os.makedirs(base_tmp, exist_ok=True)
 
 # 全局模型路徑，可根據需求修改
-MODEL_PATH = "/app/best.pt"
 USE_YOLO = os.getenv("USE_YOLO", "true").lower() in ("1", "true", "yes")
 # ---------- 單張圖 YOLO+亮度 ----------
 
@@ -46,9 +45,6 @@ def process_and_calc_brightness(image: np.ndarray, use_yolo: bool = USE_YOLO):
         return [gray], text
 
     # 以下為 use_yolo=True 時的流程
-    # 確認模型檔案存在
-    if not os.path.isfile(MODEL_PATH):
-        return [], f"❗️找不到模型: {MODEL_PATH}"
 
     crops, brightness_list = [], []
     with tempfile.TemporaryDirectory() as upload_dir, tempfile.TemporaryDirectory() as crop_dir:
@@ -58,7 +54,7 @@ def process_and_calc_brightness(image: np.ndarray, use_yolo: bool = USE_YOLO):
         cv2.imwrite(in_path, bgr)
 
         # YOLO 推論並裁切
-        yolo = YOLOImageProcessor(MODEL_PATH, upload_dir, crop_dir)
+        yolo = YOLOImageProcessor(upload_dir, crop_dir)
         yolo.process_images()
 
         # 讀取裁切結果並計算亮度
@@ -181,7 +177,7 @@ def run_yolo_on_folder(image_paths):
             ),
             cv2.imread(p)
         )
-    yolo = YOLOImageProcessor(MODEL_PATH, u, c)
+    yolo = YOLOImageProcessor(u, c)
     yolo.process_images()
     return c
 
@@ -287,5 +283,4 @@ with gr.Blocks(title="亮度分析與迴歸分析") as demo:
             )
 if __name__ == "__main__":
     # 在此修改模型路徑
-    MODEL_PATH = "/app/best.pt"
     demo.launch(server_name="0.0.0.0", server_port=8800)

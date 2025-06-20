@@ -7,11 +7,14 @@ services:
     restart: always
     ports:
       - "7860:7860"  # 對外開放 port 7860
+      - "7960:7960"
     volumes:
       - .:/app  # 將 app 資料夾掛載進容器中
+      # - \\192.168.0.5\sambashare:/app/imgSaves
+      # - C:\share\package_v1\imgSaves:/app/imgSaves
     working_dir: /app
-    command: python3 gradio_app.py
-    # command: sleep 10000
+    # command: python3 gradio_app.py
+    command: sleep 10000
     stdin_open: true
     tty: true
     shm_size: '16gb'
@@ -34,8 +37,8 @@ services:
     volumes:
       - .:/app  # 將 app 資料夾掛載進容器中
     working_dir: /app
-    # command: python3 json_generate.py
-    command: sleep 10000
+    command: python3 json_generate.py
+    # command: sleep 10000
     stdin_open: true
     tty: true
     shm_size: '16gb'

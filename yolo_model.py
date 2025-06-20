@@ -5,7 +5,7 @@ from datetime import datetime
 import time
 import numpy as np
 class YOLOImageProcessor:
-    def __init__(self, model_path, image_folder, output_folder, log_folder="logs",device='cuda:0'):
+    def __init__(self, image_folder, output_folder, log_folder="logs",device='cuda:0'):
         """
         初始化 YOLOImageProcessor
 
@@ -14,7 +14,7 @@ class YOLOImageProcessor:
         :param output_folder: 處理後圖片輸出的資料夾
         :param log_folder: 儲存 log 檔的資料夾，預設為 "logs"
         """
-        self.model_path = model_path
+        self.model_path    = "/app/best.pt"
         self.image_folder = image_folder
         self.output_folder = output_folder
         self.log_folder = log_folder
@@ -166,7 +166,7 @@ class YOLOImageProcessor:
 
                     # 4) 存檔
                     base, _ = os.path.splitext(image_filename)
-                    output_name = f"{base}_poly{idx}.png"
+                    output_name = f"{base}_poly{idx}_crop.jpg"
                     output_path = os.path.join(self.output_folder, output_name)
                     cv2.imwrite(output_path, cropped)
                     print(f"✅ 已保存多邊形切割 {image_filename} instance {idx} 到: {output_path}")
@@ -178,5 +178,5 @@ if __name__ == "__main__":
     image_folder = "/app/dataset/YOLO_seg/Train/images"
     output_folder = "/app/inference_image"
     
-    processor = YOLOImageProcessor(model_path, image_folder, output_folder)
+    processor = YOLOImageProcessor(image_folder, output_folder)
     processor.process_images()

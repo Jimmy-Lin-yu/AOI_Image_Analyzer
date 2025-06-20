@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import os
-
+import base64
 class ImageQualityAnalyzer:
     """
     A class to compute image quality metrics and analyze single images or folders of images.
@@ -17,7 +17,9 @@ class ImageQualityAnalyzer:
     }
 
 
-    def __init__(self, folder_path: str = None):
+    def __init__(self, folder_path: str ):
+        if not os.path.isdir(folder_path):
+            raise ValueError(f"Invalid folder path: {folder_path}")
         self.folder_path = folder_path
 
 #-----------------------------------------銳利度(sharpness)----------------------------------------------
@@ -357,6 +359,38 @@ class ImageQualityAnalyzer:
                 print(f"  {key.capitalize()}: {metrics[key]:.2f} → Score {score}")
             print(f"  Total Quality: {total:.1f}%")
             print("-" * 30)
+
+    def process_auto_evaluate(self) -> list[dict]:
+
+        records = []
+        for fname in os.listdir(self.folder_path):
+            if not fname.lower().endswith(("_crop.jpg","_crop.png", "_crop.jpeg")):
+                continue
+            full = os.path.join(self.folder_path, fname)
+            image = cv2.imread(full)
+            if image is None:
+                continue
+
+            metrics = {
+                "sharpness":   self.calculate_sharpness(image),
+                "exposure":    self.calculate_exposure(image),
+                "contrast":    self.calculate_contrast(image),
+                "uniformity":  self.calculate_light_uniformity(image),
+            }
+            _, total = self.evaluate_quality(metrics)
+
+            # encode 裁切後圖
+            _, buf = cv2.imencode(".jpg", image)
+            b64img = base64.b64encode(buf).decode()
+
+            records.append({
+                "filename":      fname,
+                **metrics,
+                "total_quality": total,
+                "cropped_image": b64img
+            })
+        return records
+
 
 if __name__ == "__main__":
     # Change this to your images folder path
