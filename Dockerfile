@@ -7,17 +7,18 @@ FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime
 WORKDIR /app
 
 # 安裝其他系統套件
-RUN apt-get update && \
-    apt-get install -y \
-      git wget unzip nano ffmpeg libgl1-mesa-glx libglib2.0-0 \
-      python3 python3-pip && \
-    rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+        git wget unzip nano ffmpeg libgl1-mesa-glx libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
-# 下面就不用再反覆 uninstall+install torch 了
-COPY requirements.txt /app/requirements.txt
 
-RUN pip3 install --upgrade pip && \
-    pip3 install -r requirements.txt
+COPY requirements.txt ./
 
-COPY . /app
+# 安裝 Python 依賴
+RUN pip install --upgrade pip \
+ && pip install -r requirements.txt
+
+
+# 再複製整個專案
+COPY . .
 CMD ["bash"]

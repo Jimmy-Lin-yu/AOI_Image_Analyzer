@@ -10,8 +10,8 @@ services:
     volumes:
       - .:/app  # 將 app 資料夾掛載進容器中
     working_dir: /app
-    command: python3 gradio_app.py
-    # command: sleep 10000
+    # command: python3 evaluation_app.py
+    command: sleep 10000
     stdin_open: true
     tty: true
     shm_size: '16gb'
@@ -58,7 +58,7 @@ services:
     volumes:
       - .:/app  # 將 app 資料夾掛載進容器中
     working_dir: /app
-    command: python3 json_generate.py
+    command: python3 json_generate_app.py
     # command: sleep 10000
     stdin_open: true
     tty: true
@@ -70,6 +70,7 @@ services:
             - capabilities: [gpu]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+
   brightness_calculator:
     build:
       context: .
@@ -81,7 +82,7 @@ services:
     volumes:
       - .:/app  # 將 app 資料夾掛載進容器中
     working_dir: /app
-    command: python3 brightness_calculator.py
+    command: python3 brightness_calculator_app.py
     # command: sleep 10000
     stdin_open: true
     tty: true
@@ -94,3 +95,27 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - USE_YOLO=True
+
+  all_in_one: 
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: all_in_on
+    restart: always
+    ports:
+      - "9000:9000"  # 對外開放 port 8000
+    volumes:
+      - .:/app  # 將 app 資料夾掛載進容器中
+    working_dir: /app
+    command: python3 main.py
+    # command: sleep 10000
+    stdin_open: true
+    tty: true
+    shm_size: '16gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
