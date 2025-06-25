@@ -84,8 +84,8 @@ class ImageQualityAnalyzer:
 
     @staticmethod
     def calculate_exposure(image: np.ndarray,
-                            ideal_min: float = 80,
-                            ideal_max: float = 170,
+                            ideal_min: float = 52, #上限
+                            ideal_max: float = 133, #下限
                             weight_over: float = 0.5,
                             weight_under: float = 0.5) -> float:
         """

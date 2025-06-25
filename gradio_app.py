@@ -94,13 +94,13 @@ def process_uploaded_images_with_yolo(upload_folder, crop_folder, yolo_model_pat
     return result
 
 # ------------------ (3) 裁切後圖像品質分析與 CSV 更新 ------------------
-def quality_analysis_on_cropped(crop_folder, csv_path):
+def quality_analysis_on_cropped(crop_folder: Path, csv_path: Path) -> str:
     """
     針對 crop_folder 中的裁切後圖片進行影像品質分析，
     若檔名不符合 'filename_crop.jpg' 格式則重新命名，
     並將分析結果記錄到 CSV (csv_path)。
     """
-    analyzer = ImageQualityAnalyzer()
+    analyzer = ImageQualityAnalyzer(str(crop_folder))
     records = []
     result = ""
     
@@ -325,7 +325,7 @@ def analyze_input(uploaded):
 
     # ── STEP-3 品質評分 ─────────────────────────
     try:
-        _append(quality_analysis_on_cropped(crop_dir, csv_path))
+        _append(quality_analysis_on_cropped(crop_dir, csv_path,))
     except Exception as e:
         _append(f"❌ 品質評分失敗：{e}")
 
