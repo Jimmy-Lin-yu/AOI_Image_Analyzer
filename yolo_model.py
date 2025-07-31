@@ -160,9 +160,18 @@ class YOLOImageProcessor:
 
                     # 3) 用 boundingRect 裁切出 ROI
                     x, y, w, h = cv2.boundingRect(pts)
-                    if w < 2 or h < 2:
-                        continue
-                    cropped = masked[y:y+h, x:x+w]
+
+                    x0 = max(x - 0, 0)
+                    y0 = max(y - 0, 0)
+                    x1 = min(x + w + 0, w)   # +1 後的右下角
+                    y1 = min(y + h + 0, h)   # +1 後的右下角
+
+                    new_w = x1 - x0
+                    new_h = y1 - y0
+                    if new_w < 2 or new_h < 2:
+                        return (None, None)
+                    
+                    cropped = masked[y0:y1, x0:x1]
 
                     # 4) 存檔
                     base, _ = os.path.splitext(image_filename)

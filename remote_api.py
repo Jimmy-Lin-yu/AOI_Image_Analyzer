@@ -7,15 +7,19 @@ import cv2
 import os
 import pandas as pd
 import uuid
-
+import numpy as np
 # 如果你的檔名是 image_zip_manager.py，就這樣 import：
 from image_zip_manage import ImageZipManager  
-from yolo_model import YOLOImageProcessor
+# from yolo_model import YOLOImageProcessor #暫時停止使用
+from u2_net_inference import U2NetProcessor
 from image_evaluation import ImageQualityAnalyzer
 
 # ───────── 基本設定 ──────────────────────────────
 WORK_ROOT = Path("/tmp/aoi_runs")               # 所有暫存／歷史資料夾
 WORK_ROOT.mkdir(exist_ok=True, parents=True)
+
+# U²-Net 處理器，全域可重用
+u2net = U2NetProcessor(model_path="/app/u2net.pth")
 
 app = Flask(__name__)
 # ────────────────────────────────────────────────
@@ -54,8 +58,12 @@ def infer_zip():
             p.rename(p.with_name(new_name))
 
     # 5) YOLO 裁切
-    yolo = YOLOImageProcessor( str(upload_dir),str(crop_dir))
-    yolo.process_images()
+    # # yolo = YOLOImageProcessor( str(upload_dir),str(crop_dir))
+    # yolo.process_images()
+
+    # 5) U2net裁切
+    u2net.crop_images(str(upload_dir), str(crop_dir))
+
 
     # 6) 品質分析
     analyzer = ImageQualityAnalyzer(str(crop_dir))

@@ -1,3 +1,4 @@
+# evaluation_app.py
 import gradio as gr
 import cv2
 import pandas as pd
@@ -6,8 +7,9 @@ import datetime
 import shutil
 from pathlib import Path
 from image_evaluation import ImageQualityAnalyzer
-from yolo_model import YOLOImageProcessor
+# from yolo_model import YOLOImageProcessor #暫時停止使用YOLO
 from image_zip_manage import ImageZipManager
+from u2net_cropper import U2NetCropper
 from datetime import datetime
 # ------------------ 分析圖片 ------------------
 import os
@@ -79,19 +81,26 @@ def store_uploaded_files(uploaded, upload_folder):
     return result
 
 
-# ------------------ (2) YOLO 模型處理 ------------------
-def process_uploaded_images_with_yolo(upload_folder, crop_folder, yolo_model_path):
-    """
-    呼叫 YOLO 模型處理 upload_folder 中的所有圖片，
-    將裁切後的圖片存入 crop_folder，
-    檔名格式若未符合「原檔名_crop.jpg」則調整。
-    """
-    os.makedirs(crop_folder, exist_ok=True)
+# ------------------ (2) YOLO 模型處理 ------------------ #暫時停止使用YOLO
+# def process_uploaded_images_with_yolo(upload_folder, crop_folder, yolo_model_path):
+#     """
+#     呼叫 YOLO 模型處理 upload_folder 中的所有圖片，
+#     將裁切後的圖片存入 crop_folder，
+#     檔名格式若未符合「原檔名_crop.jpg」則調整。
+#     """
+#     os.makedirs(crop_folder, exist_ok=True)
     
-    yolo_processor = YOLOImageProcessor(upload_folder, crop_folder)
-    yolo_processor.process_images()
-    result = f"✅ YOLO 處理完成，已將裁切後圖片存入 {crop_folder}\n"
-    return result
+#     yolo_processor = YOLOImageProcessor(upload_folder, crop_folder)
+#     yolo_processor.process_images()
+#     result = f"✅ YOLO 處理完成，已將裁切後圖片存入 {crop_folder}\n"
+#     return result
+
+
+def process_uploaded_images_with_u2net(upload_folder, crop_folder, model_path):
+    os.makedirs(crop_folder, exist_ok=True)
+    cropper = U2NetCropper(model_path=model_path)
+    saved = cropper.crop_images(str(upload_folder), str(crop_folder))
+    return f"✅ U²-Net 切割完成，共 {len(saved)} 張圖存入 {crop_folder}"
 
 # ------------------ (3) 裁切後圖像品質分析與 CSV 更新 ------------------
 def quality_analysis_on_cropped(crop_folder: Path, csv_path: Path) -> str:
@@ -104,8 +113,20 @@ def quality_analysis_on_cropped(crop_folder: Path, csv_path: Path) -> str:
     records = []
     result = ""
     
+
+    # ---- 先準備舊的 DataFrame，避免 KeyError ----
+    if csv_path.exists() and csv_path.stat().st_size > 0:
+        df_old = pd.read_csv(csv_path)
+        if "uploaded_image" not in df_old.columns:
+            # 如果缺欄，就清掉重新開始
+            df_old = pd.DataFrame(columns=["uploaded_image", "output"])
+    else:
+        # CSV 不存在或為空，就建立空表
+        df_old = pd.DataFrame(columns=["uploaded_image", "output"])
+
+
     for file in os.listdir(crop_folder):
-        if file.lower().endswith((".png", ".jpg", ".jpeg")):
+        if file.lower().endswith((".png", ".jpg", ".jpeg"," .bmp", ".tiff")):
             base, ext = os.path.splitext(file)
             # 檢查檔名是否包含 _crop，若無則重新命名
             if not base.endswith("_crop"):
@@ -318,14 +339,19 @@ def analyze_input(uploaded):
         _append(f"❌ 儲存檔案失敗：{e}")
 
     # ── STEP-2 YOLO 裁切 ────────────────────────
+    # try:
+    #     _append(process_uploaded_images_with_yolo(upload_dir, crop_dir, YOLO_MODEL_PATH))
+    # except Exception as e:
+    #     _append(f"❌ YOLO 處理失敗：{e}")
+
     try:
-        _append(process_uploaded_images_with_yolo(upload_dir, crop_dir, YOLO_MODEL_PATH))
+         _append(process_uploaded_images_with_u2net(upload_dir, crop_dir, U2net_MODEL_PATH))
     except Exception as e:
-        _append(f"❌ YOLO 處理失敗：{e}")
+         _append(f"❌ YOLO 處理失敗：{e}")
 
     # ── STEP-3 品質評分 ─────────────────────────
     try:
-        _append(quality_analysis_on_cropped(crop_dir, csv_path,))
+        _append(quality_analysis_on_cropped(crop_dir, csv_path))
     except Exception as e:
         _append(f"❌ 品質評分失敗：{e}")
 
@@ -372,5 +398,6 @@ with gr.Blocks(title="成像品質評分系統") as demo:
 
         
 if __name__ == "__main__":
-    YOLO_MODEL_PATH = "/app/best.pt" 
+    # YOLO_MODEL_PATH = "/app/best.pt" 
+    U2net_MODEL_PATH = "/app/u2net.pth"
     demo.launch(server_name="0.0.0.0", server_port=7860)
