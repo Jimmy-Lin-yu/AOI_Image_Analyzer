@@ -110,7 +110,28 @@ def build_brightness_tab():
 def build_json_tab():
     with gr.TabItem("JSON 產生工具"):
         with gr.Tabs():
-            # ========= 3-1 單色光 =========
+            # ========= 3-5 HSV2RGB =========
+            with gr.TabItem("HSV2RGB 自動打光"):
+                sk_hsv        = gr.File(label="📄 上傳骨架 JSON")
+                model_hsv     = gr.Dropdown(MODELS, label="選擇光源")
+                divisions_hsv = gr.Number(label="等分數量 (N)", value=8, precision=0)
+                V_fixed = gr.Number(label="亮度  V (上限100)*", value=50.0, precision=1)
+                S_repr = gr.Number(label="飽和度 S(上限100)*", value=100.0, precision=1)
+            
+
+                gen_hsv_btn   = gr.Button("生成 HSV2RGB JSON")
+                gallery_hsv   = gr.Gallery(
+                    label="10-bit 代表色表格 & HSV 色相圖",
+                    columns=2, height="auto"
+                )
+                out_hsv_file  = gr.File(label="⬇️ 下載 JSON")
+
+                gen_hsv_btn.click(
+                    fn=create_hsv2rgb_json,                                       # 改成你的 HSV 版函式
+                    inputs=[sk_hsv, model_hsv, divisions_hsv, V_fixed, S_repr],
+                    outputs=[out_hsv_file, gallery_hsv]
+                )
+            # # ========= 3-1 單色光 =========
             with gr.TabItem("單色光"):
                 sk      = gr.File(label="骨架 JSON")
                 model   = gr.Dropdown(MODELS, label="模型")
@@ -119,7 +140,7 @@ def build_json_tab():
                 file_out= gr.File()
                 btn.click(create_single_color_json, [sk, model, ch], file_out)
 
-            # ========= 3-2 自動矩陣 =========
+            # # ========= 3-2 自動矩陣 =========
             with gr.TabItem("矩陣生成"):
                 sk      = gr.File(label="骨架 JSON")
                 b_cnt   = gr.Dropdown([1,2,3], value=2, label="亮度數")
@@ -136,7 +157,7 @@ def build_json_tab():
                 inter   = [v for pair in zip(b_boxes,c_boxes) for v in pair]  # interleave
                 btn_gen.click(create_json, [sk, b_cnt, c_cnt]+inter, f_out)
 
-            # ========= 3-3 等分 =========
+            # # ========= 3-3 等分 =========
             with gr.TabItem("等分組合"):
                 sk  = gr.File(label="骨架 JSON")
                 md  = gr.Dropdown(MODELS, label="模型")
@@ -148,7 +169,7 @@ def build_json_tab():
                 btn.click(create_division_color_json,
                           [sk,md,wmx,rmx,gmx,bmx,div], f)
 
-            # ========= 3-4 抽樣 =========
+            # # ========= 3-4 抽樣 =========
             with gr.TabItem("WRGB 抽樣"):
                 sk  = gr.File(label="骨架 JSON")
                 md  = gr.Dropdown(MODELS, label="模型")
@@ -169,27 +190,6 @@ def build_json_tab():
                            wmax,rmax,gmax,bmax, brmin, brmax, samp],
                           [fout, func_txt])
                 
-            # ========= 3-5 HSV2RGB =========
-            with gr.TabItem("HSV2RGB 自動打光"):
-                sk_hsv        = gr.File(label="📄 上傳骨架 JSON")
-                model_hsv     = gr.Dropdown(MODELS, label="選擇模型")
-                divisions_hsv = gr.Number(label="等分數量 (N)", value=8, precision=0)
-                V_fixed = gr.Number(label="亮度  V (上限100)*", value=50.0, precision=1)
-                S_repr = gr.Number(label="飽和度 S(上限100)*", value=100.0, precision=1)
-            
-
-                gen_hsv_btn   = gr.Button("生成 HSV2RGB JSON")
-                gallery_hsv   = gr.Gallery(
-                    label="10-bit 代表色表格 & HSV 彩虹盤",
-                    columns=2, height="auto"
-                )
-                out_hsv_file  = gr.File(label="⬇️ 下載 JSON")
-
-                gen_hsv_btn.click(
-                    fn=create_hsv2rgb_json,                                       # 改成你的 HSV 版函式
-                    inputs=[sk_hsv, model_hsv, divisions_hsv, V_fixed, S_repr],
-                    outputs=[out_hsv_file, gallery_hsv]
-                )
 
 # ===========================================================
 # ★★★ 把三個 Tab 組在一起 ★★★
@@ -197,8 +197,8 @@ def build_json_tab():
 with gr.Blocks(title="📦 All-in-One LED 工具箱") as demo:
     with gr.Tabs():          
         build_json_tab()                 # JSON 產生器
-        build_brightness_tab()           # 亮度 / 迴歸
         build_evaluation_tab()           # 成像評分
+        build_brightness_tab()           # 亮度 / 迴歸
 
 # ---------------- 啟動 ----------------
 if __name__ == "__main__":
